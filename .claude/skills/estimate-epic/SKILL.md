@@ -46,8 +46,7 @@ If the result exceeds 5, warn the user that the Epic should probably be split.
 - **Project:** `TRACING`
 - **Epic Link field for JQL:** `"Epic Link"` or `parent`
 - **Sprint duration:** 3 weeks (15 working days)
-- **CLI tool**: `acli` (Atlassian CLI) — load `/jira:jira` skill for full command reference
-- **Custom field writes**: `acli` does not support custom fields; use Jira REST API with `$JIRA_USER` and `$JIRA_TOKEN`
+- **Cloud ID**: `redhat.atlassian.net`
 
 ## Workflow
 
@@ -56,22 +55,20 @@ If the result exceeds 5, warn the user that the Epic should probably be split.
 **If arguments provided:** Extract all `TRACING-XXXX` keys from the arguments.
 
 **If no arguments:** Query Jira for all unsized open Epics:
-
-```bash
-acli jira workitem search --jql 'project = TRACING AND issuetype = Epic AND resolution = Unresolved AND "Story Points" is EMPTY' --json
+```
+project = TRACING AND issuetype = Epic AND resolution = Unresolved AND "Story Points" is EMPTY
 ```
 
 ### Step 2: For each Epic
 
 #### 2a. Fetch child issues and their story points
 
-Load the `/jira:jira` skill for Jira CLI reference, then search for children:
+Use `mcp__atlassian__searchJiraIssuesUsingJql` with:
+- `jql`: `"Epic Link" = TRACING-XXXX OR parent = TRACING-XXXX`
+- `fields`: `["summary", "customfield_10028", "issuetype"]`
+- `maxResults`: 100
 
-```bash
-acli jira workitem search --jql '"Epic Link" = TRACING-XXXX OR parent = TRACING-XXXX' --json
-```
-
-Extract `customfield_10028` (story points) from each child. If more than 50 children, paginate.
+If more than 100 children, paginate.
 
 #### 2b. Sum story points and convert to sprints
 
@@ -81,14 +78,10 @@ Extract `customfield_10028` (story points) from each child. If more than 50 chil
 
 #### 2c. Set story points on the Epic
 
-`acli` does not support custom fields. Use the Jira REST API directly:
-
-```bash
-curl -s -X PUT "https://redhat.atlassian.net/rest/api/3/issue/TRACING-XXXX" \
-  -u "$JIRA_USER:$JIRA_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"fields": {"customfield_10028": <epic_sp>}}'
-```
+Use `mcp__atlassian__editJiraIssue` with:
+- `cloudId`: `redhat.atlassian.net`
+- `issueIdOrKey`: the Epic key
+- `fields`: `{"customfield_10028": <epic_sp>}`
 
 ### Step 3: Report to user
 

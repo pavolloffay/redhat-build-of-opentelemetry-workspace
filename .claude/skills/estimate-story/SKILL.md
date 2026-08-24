@@ -54,11 +54,10 @@ provided, ask the user for story key(s).
 
 #### 3a. Fetch the story from Jira
 
-Load the `/jira:jira` skill for Jira CLI reference, then fetch the story:
-
-```bash
-acli jira workitem view TRACING-1234 --json
-```
+Use `mcp__atlassian__getJiraIssue` with:
+- `cloudId`: `redhat.atlassian.net`
+- `issueIdOrKey`: the story key
+- `responseContentFormat`: `markdown`
 
 Extract: summary, description, components, labels, current story points value.
 
@@ -91,17 +90,14 @@ Using the rubric you read in Step 1:
 
 #### 3c. Set story points on the Jira issue
 
-`acli` does not support custom fields. Use the Jira REST API directly:
-
-```bash
-curl -s -X PUT "https://redhat.atlassian.net/rest/api/3/issue/TRACING-1234" \
-  -u "$JIRA_USER:$JIRA_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"fields": {"customfield_10028": <estimated_points>}}'
-```
+Use `mcp__atlassian__editJiraIssue` with:
+- `cloudId`: `redhat.atlassian.net`
+- `issueIdOrKey`: the story key
+- `fields`: `{"customfield_10028": <estimated_points>}`
 
 #### 3d. Append estimation note to description
 
+Use `mcp__atlassian__editJiraIssue` to update the description.
 Fetch the current description first, then append at the bottom:
 
 ```
@@ -109,14 +105,10 @@ Fetch the current description first, then append at the bottom:
 **AI Estimate:** X SP (confidence: high/medium/low)
 ```
 
+Use `contentFormat: "markdown"` for the edit.
+
 If the description already has an `**AI Estimate:**` line, replace it rather
 than adding a duplicate.
-
-Use acli to update the description (it supports plain text descriptions):
-
-```bash
-acli jira workitem edit --key "TRACING-1234" --description "<updated description>"
-```
 
 ### Step 4: Report to user
 
@@ -132,7 +124,6 @@ the estimate.
 ## Jira Field Reference
 
 - **Story Points field**: `customfield_10028` (number, float)
+- **Cloud ID**: `redhat.atlassian.net`
 - **Project**: `TRACING`
 - **Fibonacci scale**: 0, 0.5, 1, 2, 3, 5 (8+ means split the story)
-- **CLI tool**: `acli` (Atlassian CLI) — load `/jira:jira` skill for full command reference
-- **Custom field writes**: `acli` does not support custom fields; use Jira REST API with `$JIRA_USER` and `$JIRA_TOKEN`
