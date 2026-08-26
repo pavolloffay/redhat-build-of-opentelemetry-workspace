@@ -375,10 +375,6 @@ Use `COALESCE()` and `NULLIF()` for optional fields:
 COALESCE(NULLIF(a.content:spec:mode::STRING, ''), 'unset') AS mode
 ```
 
-### 6. Be Aware of the number of collected CRs limit
-
-Mention in query documentation if results might be affected by the 5 CR limit. Consider adding a separate check for clusters with exactly 5 CRs.
-
 ## References
 
 - [Insights Operator GitHub](https://github.com/openshift/insights-operator)
