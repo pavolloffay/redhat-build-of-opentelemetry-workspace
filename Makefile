@@ -13,13 +13,17 @@ REPOS = \
 	openshift/release \
 	stolostron/multicluster-observability-addon
 
-REPO_DIRS = $(foreach r,$(REPOS),$(notdir $(r)))
+GITLAB_REPOS = \
+	git@gitlab.cee.redhat.com:distributed-tracing/konflux.git
+
+REPO_DIRS = $(foreach r,$(REPOS),$(notdir $(r))) $(foreach r,$(GITLAB_REPOS),$(basename $(notdir $(r))))
 
 SKILLSAW_IMAGE := ghcr.io/stbenjam/skillsaw:latest
 
 # Clone all workspace repos into this directory
 # konflux-opentelemetry: --recurse-submodules to populate operator and collector submodules
 # openshift-docs: --single-branch --branch to clone the standalone otel docs branch
+# GitLab repos: require VPN connection to Red Hat network
 clone-repos:
 	@for repo in $(REPOS); do \
 	  name=$$(basename $$repo); \
@@ -30,6 +34,15 @@ clone-repos:
 	    if [ "$$name" = "konflux-opentelemetry" ]; then flags="--recurse-submodules"; fi; \
 	    if [ "$$name" = "openshift-docs" ]; then flags="--single-branch --branch standalone-otel-docs-main"; fi; \
 	    git clone $$flags git@github.com:$$repo.git; \
+	  fi; \
+	done
+	@for repo in $(GITLAB_REPOS); do \
+	  name=$$(basename $$repo .git); \
+	  if [ -d "$$name/.git" ]; then \
+	    echo "=== $$name already cloned ==="; \
+	  else \
+	    echo "=== Cloning $$name (requires VPN) ==="; \
+	    git clone $$repo || echo "WARNING: Failed to clone $$name - VPN required"; \
 	  fi; \
 	done
 

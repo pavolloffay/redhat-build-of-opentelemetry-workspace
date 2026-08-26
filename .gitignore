@@ -11,6 +11,7 @@ logging-view-plugin/
 multicluster-observability-addon/
 distributed-tracing-qe/
 release/
+konflux/
 
 # Regression detection
 reports/
