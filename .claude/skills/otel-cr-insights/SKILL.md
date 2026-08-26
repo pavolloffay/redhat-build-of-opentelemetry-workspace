@@ -2,7 +2,7 @@
 name: otel-cr-insights
 description: >
   Write Snowflake queries to analyze OpenTelemetry Collector CR usage from
-  insights archives. Understands data structure, collected fields, and limits.
+  insights archives. Use when the user asks to analyze OpenTelemetry Collector CR usage patterns from insights archives.
 argument-hint: "[query-description or use-case]"
 ---
 
@@ -19,9 +19,40 @@ Use this skill when:
 - Checking data collection limits or potential gaps
 - Building dashboards or reports on collector usage
 
+## Query Execution Options
+
+### Option 1: Dataverse MCP (Cursor IDE Only)
+
+**For Cursor IDE users**, you can query Snowflake directly using the Dataverse MCP server:
+
+1. Add the MCP server in Cursor Settings → Tools & MCP → Add New MCP Server:
+   ```json
+   {
+     "mcpServers": {
+       "dataverse": {
+         "url": "https://mcp.dataverse.redhat.com/mcp/"
+       }
+     }
+   }
+   ```
+
+2. Toggle on the `dataverse` server and complete Red Hat SSO authentication in your browser
+
+3. Use the MCP tools to query Snowflake directly without opening the Snowflake console
+
+**Prerequisites:**
+- Connected to Red Hat VPN
+- Cursor IDE (the MCP server is not compatible with Claude Code CLI)
+
+**Reference:** https://dataverse.pages.redhat.com/consumer/use/dataverse-agent/#direct-mcp-usage-in-cursor
+
+### Option 2: Snowflake Console (All Users)
+
+**For Claude Code CLI users** or those who prefer manual queries, use the Snowflake web console:
+
 ## Data Source
 
-**Snowflake Console**: https://app.snowflake.com/gdadclc/rhprod/#/homepage
+The OpenTelemetry Collector CR data is stored in Snowflake:
 
 **Database**: `LIGHTSPEEDARCHIVES_DB.INSIGHTS_MARTS.ARCHIVES`
 
@@ -31,7 +62,13 @@ Use this skill when:
 
 **CR Kind**: `OpenTelemetryCollector` (from `opentelemetry.io/v1beta1`)
 
-## How to Execute Queries
+**Access:**
+- Via MCP (Cursor IDE): Use the Dataverse MCP server (see Option 1 above)
+- Via Web UI: [Snowflake Console](https://app.snowflake.com/gdadclc/rhprod/#/homepage) (see Option 2 above)
+
+## How to Execute Queries (Snowflake Console)
+
+**This section applies to Option 2 (manual Snowflake console). If using the Dataverse MCP in Cursor, you can query directly via MCP tools.**
 
 1. Navigate to the [Snowflake Console](https://app.snowflake.com/gdadclc/rhprod/#/homepage)
 2. In the left sidebar, click **Projects** → **Worksheets**
@@ -61,7 +98,7 @@ The OpenTelemetry Collector CR collection is implemented in the insights-operato
 
 ## Collection Limits
 
-### ⚠️ CRITICAL: 5 CR Limit Per Cluster
+### 5 CR Limit Per Cluster
 
 **Only the first 5 OpenTelemetryCollector CRs per cluster are collected.**
 
@@ -302,351 +339,14 @@ These filters ensure metrics reflect production customer usage patterns.
 
 ## Ready-to-Use Queries
 
-The following queries are **complete and runnable** - just copy, paste into Snowflake, and update the date.
+For complete, copy-paste-ready Snowflake queries, see **[queries.md](queries.md)**.
 
-### Query 1: Component Usage by Type
-
-Shows which receivers, processors, exporters, connectors, and extensions are most used across customer clusters.
-
-```sql
--- Component Usage by Type
--- Returns: component_category, component_type, cluster_count
-WITH clusters_dedup AS (
-  SELECT cluster_id
-  FROM OPENSHIFT_DB.MARTS.CLUSTERS
-  WHERE COALESCE(internal, FALSE) = FALSE
-    AND COALESCE(ci, FALSE) = FALSE
-    AND (
-      email_domain IS NULL
-      OR (
-        LOWER(email_domain) NOT LIKE '%redhat.com'
-        AND LOWER(email_domain) NOT LIKE '%ibm.com'
-      )
-    )
-    AND LOWER(COALESCE(support, '')) NOT IN ('eval', 'self-support')
-  QUALIFY ROW_NUMBER() OVER (
-    PARTITION BY cluster_id
-    ORDER BY last_report_on DESC NULLS LAST
-  ) = 1
-),
-crs AS (
-  SELECT
-    a.system_id,
-    a.content:spec:config:service:pipelines AS pipelines,
-    a.content:spec:config:service:extensions AS extensions
-  FROM LIGHTSPEEDARCHIVES_DB.INSIGHTS_MARTS.ARCHIVES a
-  WHERE a.service_id = 'insights_daily'
-    AND a.received_on = '2026-08-24'  -- UPDATE THIS DATE
-    AND a.file_path LIKE 'config/opentelemetry/%'
-    AND a.content:kind::STRING = 'OpenTelemetryCollector'
-  QUALIFY ROW_NUMBER() OVER (
-    PARTITION BY a.system_id, a.file_path
-    ORDER BY a.received_at DESC NULLS LAST
-  ) = 1
-),
-components_raw AS (
-  SELECT
-    c.system_id,
-    'receiver' AS component_category,
-    SPLIT_PART(rcv.value::STRING, '/', 1) AS component_type
-  FROM crs c
-  JOIN clusters_dedup cl ON cl.cluster_id = c.system_id,
-  LATERAL FLATTEN(input => c.pipelines) pipeline,
-  LATERAL FLATTEN(input => pipeline.value:receivers) rcv
-  
-  UNION ALL
-  
-  SELECT
-    c.system_id,
-    'processor' AS component_category,
-    SPLIT_PART(proc.value::STRING, '/', 1) AS component_type
-  FROM crs c
-  JOIN clusters_dedup cl ON cl.cluster_id = c.system_id,
-  LATERAL FLATTEN(input => c.pipelines) pipeline,
-  LATERAL FLATTEN(input => pipeline.value:processors) proc
-  
-  UNION ALL
-  
-  SELECT
-    c.system_id,
-    'exporter' AS component_category,
-    SPLIT_PART(exp.value::STRING, '/', 1) AS component_type
-  FROM crs c
-  JOIN clusters_dedup cl ON cl.cluster_id = c.system_id,
-  LATERAL FLATTEN(input => c.pipelines) pipeline,
-  LATERAL FLATTEN(input => pipeline.value:exporters) exp
-  
-  UNION ALL
-  
-  SELECT
-    c.system_id,
-    'connector' AS component_category,
-    SPLIT_PART(conn.value::STRING, '/', 1) AS component_type
-  FROM crs c
-  JOIN clusters_dedup cl ON cl.cluster_id = c.system_id,
-  LATERAL FLATTEN(input => c.pipelines) pipeline,
-  LATERAL FLATTEN(input => pipeline.value:connectors) conn
-  
-  UNION ALL
-  
-  SELECT
-    c.system_id,
-    'extension' AS component_category,
-    SPLIT_PART(ext.value::STRING, '/', 1) AS component_type
-  FROM crs c
-  JOIN clusters_dedup cl ON cl.cluster_id = c.system_id,
-  LATERAL FLATTEN(input => c.extensions) ext
-),
-components AS (
-  SELECT DISTINCT
-    system_id,
-    component_category,
-    component_type
-  FROM components_raw
-)
-SELECT
-  component_category,
-  component_type,
-  COUNT(DISTINCT system_id) AS cluster_count
-FROM components
-GROUP BY 1, 2
-ORDER BY component_category, cluster_count DESC;
-```
-
-### Query 2: Signal Adoption
-
-Shows how many clusters collect logs, metrics, and/or traces.
-
-```sql
--- Signal Adoption
--- Returns: signal_type, cluster_count
-WITH clusters_dedup AS (
-  SELECT cluster_id
-  FROM OPENSHIFT_DB.MARTS.CLUSTERS
-  WHERE COALESCE(internal, FALSE) = FALSE
-    AND COALESCE(ci, FALSE) = FALSE
-    AND (
-      email_domain IS NULL
-      OR (
-        LOWER(email_domain) NOT LIKE '%redhat.com'
-        AND LOWER(email_domain) NOT LIKE '%ibm.com'
-      )
-    )
-    AND LOWER(COALESCE(support, '')) NOT IN ('eval', 'self-support')
-  QUALIFY ROW_NUMBER() OVER (
-    PARTITION BY cluster_id
-    ORDER BY last_report_on DESC NULLS LAST
-  ) = 1
-),
-crs AS (
-  SELECT
-    a.system_id,
-    a.content:spec:config:service:pipelines AS pipelines
-  FROM LIGHTSPEEDARCHIVES_DB.INSIGHTS_MARTS.ARCHIVES a
-  WHERE a.service_id = 'insights_daily'
-    AND a.received_on = '2026-08-24'  -- UPDATE THIS DATE
-    AND a.file_path LIKE 'config/opentelemetry/%'
-    AND a.content:kind::STRING = 'OpenTelemetryCollector'
-  QUALIFY ROW_NUMBER() OVER (
-    PARTITION BY a.system_id, a.file_path
-    ORDER BY a.received_at DESC NULLS LAST
-  ) = 1
-),
-signals AS (
-  SELECT DISTINCT
-    c.system_id,
-    SPLIT_PART(pipeline.key::STRING, '/', 1) AS signal_type
-  FROM crs c
-  JOIN clusters_dedup cl ON cl.cluster_id = c.system_id,
-  LATERAL FLATTEN(input => c.pipelines) pipeline
-)
-SELECT
-  signal_type,
-  COUNT(DISTINCT system_id) AS cluster_count
-FROM signals
-GROUP BY 1
-ORDER BY cluster_count DESC;
-```
-
-### Query 3: Multi-Signal Adoption
-
-Shows which combinations of signals are used (e.g., logs only, logs+metrics, logs+metrics+traces).
-
-```sql
--- Multi-Signal Adoption
--- Returns: signal_combination (e.g., 'logs+metrics+traces'), cluster_count
-WITH clusters_dedup AS (
-  SELECT cluster_id
-  FROM OPENSHIFT_DB.MARTS.CLUSTERS
-  WHERE COALESCE(internal, FALSE) = FALSE
-    AND COALESCE(ci, FALSE) = FALSE
-    AND (
-      email_domain IS NULL
-      OR (
-        LOWER(email_domain) NOT LIKE '%redhat.com'
-        AND LOWER(email_domain) NOT LIKE '%ibm.com'
-      )
-    )
-    AND LOWER(COALESCE(support, '')) NOT IN ('eval', 'self-support')
-  QUALIFY ROW_NUMBER() OVER (
-    PARTITION BY cluster_id
-    ORDER BY last_report_on DESC NULLS LAST
-  ) = 1
-),
-crs AS (
-  SELECT
-    a.system_id,
-    a.content:spec:config:service:pipelines AS pipelines
-  FROM LIGHTSPEEDARCHIVES_DB.INSIGHTS_MARTS.ARCHIVES a
-  WHERE a.service_id = 'insights_daily'
-    AND a.received_on = '2026-08-24'  -- UPDATE THIS DATE
-    AND a.file_path LIKE 'config/opentelemetry/%'
-    AND a.content:kind::STRING = 'OpenTelemetryCollector'
-  QUALIFY ROW_NUMBER() OVER (
-    PARTITION BY a.system_id, a.file_path
-    ORDER BY a.received_at DESC NULLS LAST
-  ) = 1
-),
-signals AS (
-  SELECT DISTINCT
-    c.system_id,
-    SPLIT_PART(pipeline.key::STRING, '/', 1) AS signal_type
-  FROM crs c
-  JOIN clusters_dedup cl ON cl.cluster_id = c.system_id,
-  LATERAL FLATTEN(input => c.pipelines) pipeline
-),
-cluster_signals AS (
-  SELECT
-    system_id,
-    MAX(IFF(signal_type = 'logs', 1, 0)) AS has_logs,
-    MAX(IFF(signal_type = 'metrics', 1, 0)) AS has_metrics,
-    MAX(IFF(signal_type = 'traces', 1, 0)) AS has_traces
-  FROM signals
-  GROUP BY system_id
-)
-SELECT
-  ARRAY_TO_STRING(
-    ARRAY_COMPACT([
-      IFF(has_logs = 1, 'logs', NULL),
-      IFF(has_metrics = 1, 'metrics', NULL),
-      IFF(has_traces = 1, 'traces', NULL)
-    ]), 
-    '+'
-  ) AS signal_combination,
-  COUNT(DISTINCT system_id) AS cluster_count
-FROM cluster_signals
-GROUP BY 1
-ORDER BY cluster_count DESC;
-```
-
-### Query 4: Deployment Mode Distribution
-
-Shows how collectors are deployed (deployment, daemonset, statefulset, sidecar).
-
-```sql
--- Deployment Mode Distribution
--- Returns: deployment_mode, cluster_count
-WITH clusters_dedup AS (
-  SELECT cluster_id
-  FROM OPENSHIFT_DB.MARTS.CLUSTERS
-  WHERE COALESCE(internal, FALSE) = FALSE
-    AND COALESCE(ci, FALSE) = FALSE
-    AND (
-      email_domain IS NULL
-      OR (
-        LOWER(email_domain) NOT LIKE '%redhat.com'
-        AND LOWER(email_domain) NOT LIKE '%ibm.com'
-      )
-    )
-    AND LOWER(COALESCE(support, '')) NOT IN ('eval', 'self-support')
-  QUALIFY ROW_NUMBER() OVER (
-    PARTITION BY cluster_id
-    ORDER BY last_report_on DESC NULLS LAST
-  ) = 1
-),
-crs AS (
-  SELECT
-    a.system_id,
-    a.content:spec:mode::STRING AS mode
-  FROM LIGHTSPEEDARCHIVES_DB.INSIGHTS_MARTS.ARCHIVES a
-  WHERE a.service_id = 'insights_daily'
-    AND a.received_on = '2026-08-24'  -- UPDATE THIS DATE
-    AND a.file_path LIKE 'config/opentelemetry/%'
-    AND a.content:kind::STRING = 'OpenTelemetryCollector'
-  QUALIFY ROW_NUMBER() OVER (
-    PARTITION BY a.system_id, a.file_path
-    ORDER BY a.received_at DESC NULLS LAST
-  ) = 1
-)
-SELECT
-  COALESCE(NULLIF(c.mode, ''), 'unset') AS deployment_mode,
-  COUNT(DISTINCT c.system_id) AS cluster_count
-FROM crs c
-JOIN clusters_dedup cl ON cl.cluster_id = c.system_id
-GROUP BY 1
-ORDER BY cluster_count DESC;
-```
-
-### Query 5: CR Density Per Cluster
-
-Shows how many collector CRs are deployed per cluster.
-
-```sql
--- CR Density Per Cluster
--- Returns: cr_count_bucket, cluster_count
-WITH clusters_dedup AS (
-  SELECT cluster_id
-  FROM OPENSHIFT_DB.MARTS.CLUSTERS
-  WHERE COALESCE(internal, FALSE) = FALSE
-    AND COALESCE(ci, FALSE) = FALSE
-    AND (
-      email_domain IS NULL
-      OR (
-        LOWER(email_domain) NOT LIKE '%redhat.com'
-        AND LOWER(email_domain) NOT LIKE '%ibm.com'
-      )
-    )
-    AND LOWER(COALESCE(support, '')) NOT IN ('eval', 'self-support')
-  QUALIFY ROW_NUMBER() OVER (
-    PARTITION BY cluster_id
-    ORDER BY last_report_on DESC NULLS LAST
-  ) = 1
-),
-crs AS (
-  SELECT
-    a.system_id,
-    a.file_path
-  FROM LIGHTSPEEDARCHIVES_DB.INSIGHTS_MARTS.ARCHIVES a
-  WHERE a.service_id = 'insights_daily'
-    AND a.received_on = '2026-08-24'  -- UPDATE THIS DATE
-    AND a.file_path LIKE 'config/opentelemetry/%'
-    AND a.content:kind::STRING = 'OpenTelemetryCollector'
-  QUALIFY ROW_NUMBER() OVER (
-    PARTITION BY a.system_id, a.file_path
-    ORDER BY a.received_at DESC NULLS LAST
-  ) = 1
-),
-cr_counts AS (
-  SELECT
-    system_id,
-    COUNT(*) AS cr_count,
-    CASE
-      WHEN COUNT(*) = 1 THEN '1 CR'
-      WHEN COUNT(*) BETWEEN 2 AND 3 THEN '2-3 CRs'
-      WHEN COUNT(*) BETWEEN 4 AND 5 THEN '4-5 CRs (might be truncated)'
-      ELSE '6+ CRs (ERROR: should not see this)'
-    END AS cr_count_bucket
-  FROM crs c
-  JOIN clusters_dedup cl ON cl.cluster_id = c.system_id
-  GROUP BY system_id
-)
-SELECT
-  cr_count_bucket,
-  COUNT(*) AS cluster_count
-FROM cr_counts
-GROUP BY cr_count_bucket
-ORDER BY MIN(cr_count);
-```
+The queries file includes:
+1. **Component Usage by Type** - Which receivers, processors, exporters, connectors, and extensions are most used
+2. **Signal Adoption** - How many clusters collect logs, metrics, and/or traces
+3. **Multi-Signal Adoption** - Signal combinations (logs+metrics+traces)
+4. **Deployment Mode Distribution** - DaemonSet vs Deployment usage
+5. **CR Density Per Cluster** - How many collector CRs per cluster
 
 ---
 
