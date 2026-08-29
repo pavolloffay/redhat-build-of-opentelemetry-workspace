@@ -22,7 +22,7 @@ kubectl apply -f https://raw.githubusercontent.com/os-observability/konflux-open
 
 This method uses FBC (File-Based Catalog) fragments and only works on `amd64` clusters.
 
-Use skill `/rhosdt-team:rhosdt-team` to get the release payload (FBC fragments or OLM bundle).
+Search `konflux-opentelemetry` repository to find the release payload (FBC fragments or OLM bundle).
 
 **Before applying**, replace the `spec.image` field in all `CatalogSource` resources with the FBC fragment image from the Konflux repo:
 - In [`install-operators/tempo.yaml`](install-operators/tempo.yaml): replace the CatalogSource `spec.image` with the Tempo FBC fragment image
