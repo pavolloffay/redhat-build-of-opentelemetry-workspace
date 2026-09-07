@@ -140,40 +140,7 @@ The OpenTelemetry Collector CR collection is implemented in the insights-operato
 
 ## Collection Limits
 
-### 5 CR Limit Per Cluster
-
-**Only the first 5 OpenTelemetryCollector CRs per cluster are collected.**
-
-Source: `gather_opentelemetry_collectors.go` line 85:
-```go
-const limit = 5
-```
-
-**Implications**:
-- Clusters with >5 CRs have incomplete data
-- Component usage queries **undercount** if 6th+ CRs use different components
-- **No metadata is stored** indicating truncation occurred or total CR count
-- Cannot definitively identify which clusters hit the limit (can only detect clusters with exactly 5 CRs as "suspicious")
-- For an **uncapped** collector CR count, use `OPENSHIFTTELEMETRY_DB.MARTS.CLUSTER_USAGE_RESOURCES_SUM` ([queries-olm.md](queries-olm.md) query 6)
-
-**Detection query** (clusters that might be truncated):
-```sql
-SELECT system_id, COUNT(*) AS cr_count
-FROM (
-  SELECT a.system_id, a.file_path
-  FROM LIGHTSPEEDARCHIVES_DB.INSIGHTS_MARTS.ARCHIVES a
-  WHERE a.service_id = 'insights_daily'
-    AND a.received_on = '2026-08-24'
-    AND a.file_path LIKE 'config/opentelemetry/%'
-    AND a.content:kind::STRING = 'OpenTelemetryCollector'
-  QUALIFY ROW_NUMBER() OVER (
-    PARTITION BY a.system_id, a.file_path
-    ORDER BY a.received_at DESC NULLS LAST
-  ) = 1
-)
-GROUP BY system_id
-HAVING COUNT(*) = 5;
-```
+**Only the first 5 OpenTelemetryCollector CRs per cluster are collected**, so component usage queries can undercount clusters with more than 5 CRs. For an uncapped CR count, use `CLUSTER_USAGE_RESOURCES_SUM` ([queries-olm.md](queries-olm.md) query 6). See [reference.md](reference.md#collection-limits) for the detection query and details.
 
 ## Fields Collected
 
