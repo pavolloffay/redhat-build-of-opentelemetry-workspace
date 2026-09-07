@@ -1,5 +1,7 @@
 # Ready-to-Use Snowflake Queries
 
+Insights archives (collector CR config, 5-CR cap). For operator OLM install and uncapped CR counts, see **[queries-olm.md](queries-olm.md)**.
+
 The following queries are **complete and runnable** - just copy, paste into Snowflake (or use via Dataverse MCP in Cursor), and update the date.
 
 ## Query 1: Component Usage by Type
