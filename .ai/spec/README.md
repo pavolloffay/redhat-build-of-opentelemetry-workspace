@@ -27,6 +27,7 @@ AI agents. Content is optimized for precision and machine consumption.
 | Understand the collector pipeline | `what/collector.md` |
 | Understand CRDs and the operator | `what/operator.md` |
 | Understand auto-instrumentation | `what/auto-instrumentation.md` |
+| Understand the OBI receiver (eBPF instrumentation) | `what/obi.md` |
 | Understand target allocation | `what/target-allocator.md` |
 | Understand productization | `what/productization.md` |
 | Understand non-repudiation signing | `what/signing.md` |
@@ -39,7 +40,7 @@ AI agents. Content is optimized for precision and machine consumption.
 | what/ | how/ |
 |---|---|
 | `what/system-overview.md` | `how/project-structure.md` |
-| `what/collector.md` | `how/repo-map.md` (Collector sections) |
+| `what/collector.md`, `what/obi.md` | `how/repo-map.md` (Collector sections) |
 | `what/operator.md` | `how/repo-map.md` (Operator section) |
 | `what/productization.md` | `how/build-pipeline.md`, `how/repo-map.md` (Productization section) |
 

@@ -24,6 +24,7 @@ Lookup table: concern → repo(s) → spec file(s). Use this to find where to go
 | OCB build and `_build/` generation | redhat-opentelemetry-collector | `how/build-pipeline.md` |
 | RPM packaging | redhat-opentelemetry-collector | `what/productization.md` |
 | Non-repudiation signing (SDK + collector processor) | redhat-opentelemetry-collector | `what/signing.md` |
+| OBI receiver (eBPF instrumentation) | redhat-opentelemetry-collector | `what/obi.md` |
 
 ## Operator
 
@@ -57,6 +58,7 @@ These features span multiple repos:
 | Feature | Repos |
 |---|---|
 | Adding a new collector component | redhat-opentelemetry-collector, konflux-opentelemetry, openshift-docs |
+| OBI receiver features & k8s-cache | redhat-opentelemetry-collector, opentelemetry-operator, konflux-opentelemetry, openshift-docs |
 | New CRD or API field | opentelemetry-operator, konflux-opentelemetry, openshift-docs |
 | Version bump (upstream rebase) | redhat-opentelemetry-collector, opentelemetry-operator (submodules in konflux-opentelemetry) |
 | New OCP version support | konflux-opentelemetry (new FBC catalog + Dockerfile) |
