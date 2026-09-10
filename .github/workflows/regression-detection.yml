@@ -1,8 +1,17 @@
 # Upstream Regression Detection for Red Hat build of OpenTelemetry
 #
-# Checks weekly for new upstream operator releases and runs regression
-# detection when a new release is found. Skips if a report already exists
-# for the latest release. Can also be triggered manually.
+# Runs on a fixed schedule roughly every six weeks (~1.5 months) — reports
+# are large enough that more frequent runs outpace the time needed to act on
+# one — regardless of whether the upstream operator version has changed
+# since the last run. Can also be triggered manually. Generated reports are
+# committed directly to main under reports/.
+#
+# Split into two jobs on purpose: detect-regressions runs the AI agent
+# (claude -p --dangerously-skip-permissions) and only ever holds read-only
+# tokens, so a misbehaving or misdirected tool call there has no path to
+# writing to the repo. publish-report holds the only contents: write
+# permission in this workflow, runs no AI/agent code, and only ever commits
+# the two report files that detect-regressions uploaded as an artifact.
 #
 # Required secrets:
 #   ANTHROPIC_API_KEY           — Anthropic API key for Claude
@@ -14,8 +23,12 @@ name: Regression Detection
 
 on:
   schedule:
-    # Weekly on Monday at 07:57 UTC — checks for new releases, skips if already reported
-    - cron: '57 7 * * 1'
+    # Alternates two fixed dates, each ~45 days (~6 weeks) apart, all year:
+    # 1st of Jan/Apr/Jul/Oct, then 15th of Feb/May/Aug/Nov. Cron can't express
+    # a rolling "every N weeks" interval, so this approximates it with fixed
+    # calendar dates instead of adding runtime state to track the last run.
+    - cron: '57 7 1 1,4,7,10 *'
+    - cron: '57 7 15 2,5,8,11 *'
   workflow_dispatch:
     inputs:
       method:
@@ -32,11 +45,6 @@ on:
           - doc-validation
           - test-coverage
           - dependencies
-      force:
-        description: 'Force run even if a report exists for the latest release'
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: read
@@ -48,47 +56,40 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
+    outputs:
+      latest_tag: ${{ steps.release-check.outputs.latest_tag }}
+      reported: ${{ steps.run-detection.outputs.reported }}
+      report_date: ${{ steps.run-detection.outputs.report_date }}
+      artifact_name: regression-report-${{ steps.release-check.outputs.latest_tag }}-${{ github.run_id }}
+
     steps:
       - name: Checkout workspace
         uses: actions/checkout@v4
 
-      - name: Restore last-reported-version marker
-        uses: actions/cache@v4
-        with:
-          path: reports/.last-reported-version
-          key: regression-last-reported-version
-
-      - name: Check for new upstream release
+      - name: Get latest upstream release tag
         id: release-check
         run: |
           # Get the latest upstream operator release tag (strip ^{} from annotated tags)
+          # — purely informational at this point (commit messages, job summary,
+          # artifact name); it no longer gates whether this run proceeds.
           LATEST_TAG=$(git ls-remote --tags --sort=-v:refname https://github.com/open-telemetry/opentelemetry-operator.git 'refs/tags/v*' \
             | sed 's|.*refs/tags/||; s|\^{}$||' | sort -Vru | head -1)
           if [ -z "$LATEST_TAG" ]; then
             echo "ERROR: could not determine the latest upstream operator tag." >&2
             exit 1
           fi
+          # This value comes from a repo we do not control, and it reaches a job
+          # that holds contents: write. Git permits $ ` " ( ) ; | & in tag names,
+          # so an unvalidated tag is a shell-injection vector. Fail closed on
+          # anything that is not a plain semver tag.
+          if ! printf '%s' "$LATEST_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.]+)?$'; then
+            echo "ERROR: upstream tag '$LATEST_TAG' is not a plain semver tag; refusing to use it." >&2
+            exit 1
+          fi
           echo "Latest upstream operator release: $LATEST_TAG"
           echo "latest_tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
 
-          # Check if we already have a report for this version
-          MARKER_FILE="reports/.last-reported-version"
-          LAST_REPORTED=""
-          if [ -f "$MARKER_FILE" ]; then
-            LAST_REPORTED=$(cat "$MARKER_FILE")
-          fi
-          echo "Last reported version: ${LAST_REPORTED:-'(none)'}"
-
-          if [ "$LAST_REPORTED" = "$LATEST_TAG" ] && [ "${{ inputs.force }}" != "true" ] && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
-            echo "Report already exists for $LATEST_TAG. Skipping."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "New release detected or manual trigger. Running regression detection."
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Install Claude Code CLI
-        if: steps.release-check.outputs.skip != 'true'
         run: |
           sudo install -d -m 0755 /etc/apt/keyrings
           curl -fsSL https://downloads.claude.ai/keys/claude-code.asc \
@@ -99,12 +100,11 @@ jobs:
           sudo apt-get install -y --no-install-recommends claude-code
 
       - name: Install dependencies
-        if: steps.release-check.outputs.skip != 'true'
         run: |
           sudo apt-get install -y --no-install-recommends jq python3 python3-yaml
 
       - name: Configure GCP credentials (Vertex AI)
-        if: steps.release-check.outputs.skip != 'true' && vars.CLAUDE_CODE_USE_VERTEX == '1'
+        if: vars.CLAUDE_CODE_USE_VERTEX == '1'
         run: |
           mkdir -p /tmp/gcp
           echo "$GCP_CREDENTIALS_JSON" > /tmp/gcp/key.json
@@ -113,23 +113,33 @@ jobs:
           GCP_CREDENTIALS_JSON: ${{ secrets.GCP_CREDENTIALS_JSON }}
 
       - name: Use HTTPS for cloning (CI runner has no SSH key)
-        if: steps.release-check.outputs.skip != 'true'
         run: git config --global url."https://github.com/".insteadOf "git@github.com:"
 
       - name: Clone repos
-        if: steps.release-check.outputs.skip != 'true'
         run: make clone-repos
 
       - name: Run regression detection
-        if: steps.release-check.outputs.skip != 'true'
+        id: run-detection
         env:
+          # Read-only: this job's permissions block grants only contents: read,
+          # issues: read, pull-requests: read — the AI agent below never has
+          # write access, by design (see file header).
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_CODE_USE_VERTEX: ${{ vars.CLAUDE_CODE_USE_VERTEX || '' }}
           CLOUD_ML_REGION: ${{ vars.CLOUD_ML_REGION || 'global' }}
           ANTHROPIC_VERTEX_PROJECT_ID: ${{ vars.ANTHROPIC_VERTEX_PROJECT_ID || '' }}
+          # The regression-detection Workflow runs as a background task. In print
+          # mode (`claude -p`), the CLI only waits up to this ceiling before killing
+          # any still-running background task and exiting — without it, a workflow
+          # that takes longer than the 600s default gets terminated before the
+          # report is ever written. Wait indefinitely instead; the job's own
+          # timeout-minutes and --max-budget-usd remain the real caps.
+          CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: '0'
+          # A type: choice input, so GitHub already constrains it — passed via
+          # env anyway so no ${{ }} substitution happens inside a run: body.
+          METHOD: ${{ inputs.method }}
         run: |
-          METHOD="${{ inputs.method }}"
           ARGS=""
           if [ -n "$METHOD" ]; then
             ARGS="--method $METHOD"
@@ -141,19 +151,26 @@ jobs:
             --max-budget-usd 25 \
             </dev/null
 
-          # Record the version we just reported on
-          mkdir -p reports
-          echo "${{ steps.release-check.outputs.latest_tag }}" > reports/.last-reported-version
-
-      - name: Save last-reported-version marker
-        if: always() && steps.release-check.outputs.skip != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: reports/.last-reported-version
-          key: regression-last-reported-version
+          # Only report success if the report actually landed — claude -p can
+          # exit 0 without producing anything (e.g. the background workflow got
+          # killed mid-run), and the publish job must not try to commit a
+          # report that was never written.
+          # The report filename embeds the downstream operator version
+          # (discovered at runtime), which this shell doesn't know ahead of
+          # time — match by date suffix instead of an exact name. Recorded as
+          # a job output (not recomputed downstream) so the publish job can't
+          # land on a different date if the two jobs straddle UTC midnight.
+          REPORT_DATE=$(date +%Y-%m-%d)
+          echo "report_date=$REPORT_DATE" >> "$GITHUB_OUTPUT"
+          if compgen -G "reports/regression-summary-v*-${REPORT_DATE}.json" > /dev/null && compgen -G "reports/regression-detection-v*-${REPORT_DATE}.md" > /dev/null; then
+            echo "reported=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Report files for $REPORT_DATE not found — the publish job will be skipped this run."
+            echo "reported=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Upload regression report
-        if: always() && steps.release-check.outputs.skip != 'true'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: regression-report-${{ steps.release-check.outputs.latest_tag }}-${{ github.run_id }}
@@ -162,13 +179,15 @@ jobs:
           if-no-files-found: warn
 
       - name: Post summary to job
-        if: always() && steps.release-check.outputs.skip != 'true'
+        if: always()
+        env:
+          REPORT_DATE: ${{ steps.run-detection.outputs.report_date }}
+          LATEST_TAG: ${{ steps.release-check.outputs.latest_tag }}
         run: |
-          REPORT_DATE=$(date +%Y-%m-%d)
-          REPORT_FILE="reports/regression-report-${REPORT_DATE}.html"
-          SUMMARY_FILE="reports/regression-summary-${REPORT_DATE}.json"
+          REPORT_FILE=$(ls reports/regression-detection-v*-${REPORT_DATE}.md 2>/dev/null | head -1)
+          SUMMARY_FILE=$(ls reports/regression-summary-v*-${REPORT_DATE}.json 2>/dev/null | head -1)
 
-          echo "## Regression Detection — ${{ steps.release-check.outputs.latest_tag }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Regression Detection — ${LATEST_TAG}" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
           if [ -f "$SUMMARY_FILE" ]; then
@@ -186,18 +205,74 @@ jobs:
             echo "| Low | $LOW |" >> "$GITHUB_STEP_SUMMARY"
             echo "| **Total** | **$TOTAL** |" >> "$GITHUB_STEP_SUMMARY"
           elif [ -f "$REPORT_FILE" ]; then
-            echo "Summary counts unavailable — see the full HTML report in the uploaded artifact (${REPORT_FILE})." >> "$GITHUB_STEP_SUMMARY"
+            echo "Summary counts unavailable — see the full Markdown report in the uploaded artifact (${REPORT_FILE})." >> "$GITHUB_STEP_SUMMARY"
           else
             echo "No report generated. Check job logs for errors." >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Post skip summary
-        if: steps.release-check.outputs.skip == 'true'
-        run: |
-          echo "## Regression Detection — Skipped" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "No new upstream release since last report (${{ steps.release-check.outputs.latest_tag }})." >> "$GITHUB_STEP_SUMMARY"
-
       - name: Cleanup credentials
         if: always()
         run: rm -f /tmp/gcp/key.json
+
+  publish-report:
+    needs: detect-regressions
+    if: success() && needs.detect-regressions.outputs.reported == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout workspace
+        uses: actions/checkout@v4
+
+      - name: Download regression report artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.detect-regressions.outputs.artifact_name }}
+          path: /tmp/report-artifact
+
+      - name: Copy only the expected report files into reports/
+        env:
+          # Passed via env, never interpolated into the script body: ${{ }} is
+          # substituted textually before bash parses it, so a hostile value
+          # would execute here.
+          REPORT_DATE: ${{ needs.detect-regressions.outputs.report_date }}
+          ARTIFACT_NAME: ${{ needs.detect-regressions.outputs.artifact_name }}
+        run: |
+          # Defense in depth: only ever stage the two known report filename
+          # patterns for today's date, regardless of what else the artifact
+          # might contain — this job holds contents: write and must not
+          # blindly trust artifact contents produced by the AI-driven job.
+          # The version segment is discovered at runtime by the workflow, so
+          # match by date suffix rather than an exact name. The date comes
+          # from detect-regressions' output, not a fresh `date` call here, so
+          # the two jobs can't disagree if they straddle UTC midnight.
+          shopt -s nullglob
+          SUMMARY_MATCHES=(/tmp/report-artifact/regression-summary-v*-${REPORT_DATE}.json)
+          REPORT_MATCHES=(/tmp/report-artifact/regression-detection-v*-${REPORT_DATE}.md)
+          shopt -u nullglob
+          if [ "${#SUMMARY_MATCHES[@]}" -ne 1 ] || [ "${#REPORT_MATCHES[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one regression-summary-v*-${REPORT_DATE}.json (found ${#SUMMARY_MATCHES[@]}) and exactly one regression-detection-v*-${REPORT_DATE}.md (found ${#REPORT_MATCHES[@]}) in artifact ${ARTIFACT_NAME}" >&2
+            exit 1
+          fi
+          for f in "${SUMMARY_MATCHES[@]}" "${REPORT_MATCHES[@]}"; do
+            cp "$f" "reports/$(basename "$f")"
+          done
+
+      - name: Commit generated reports
+        env:
+          # Via env, not ${{ }} in the body: this job holds contents: write and
+          # LATEST_TAG originates from an upstream repo we do not control.
+          LATEST_TAG: ${{ needs.detect-regressions.outputs.latest_tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add reports/regression-summary-*.json reports/regression-detection-*.md
+          if git diff --cached --quiet; then
+            echo "No report changes to commit."
+          else
+            git commit -m "Add regression detection report for ${LATEST_TAG}"
+            git push origin HEAD:main
+          fi

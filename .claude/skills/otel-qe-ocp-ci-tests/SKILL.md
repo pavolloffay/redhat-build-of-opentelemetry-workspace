@@ -1,12 +1,25 @@
 ---
 name: otel-qe-ocp-ci-tests
-description: Set up OpenTelemetry OCP CI stage testing by creating a PR to openshift/release with IIBs from konflux release payloads, then triggering the stage jobs. Use when starting stage testing for a new product release or updating IIB images after a Konflux FBC build.
-argument-hint: 'version: RHOSDT release version (e.g., "3.11", "3.12")'
+description: Set up OpenTelemetry OCP CI stage testing by creating a PR to openshift/release with IIBs from konflux release payloads, then triggering the stage jobs. Use when starting stage testing for a new product release or updating IIB images after a Konflux FBC build. Also use when stage testing on an existing PR is finished and the rehearsal job results need collecting and posting to the Jira tracker.
+argument-hint: '{version} to set up testing (e.g. "3.11"), OR {pr-id} {jira-id} to collect final results and post them to Jira (e.g. "84239 TRACING-1234")'
 ---
 
 # OpenTelemetry OCP CI Stage Testing
 
 Set up stage testing for Red Hat build of OpenTelemetry release by creating a PR to the `openshift/release` repository with correct IIB (Index Image Build) mappings from the Konflux release payload.
+
+## Modes
+
+This skill has two independent entry points. Pick by what the user passed:
+
+| Arguments | Mode | Run |
+|---|---|---|
+| A release version (`3.11`) | Setup | Steps 1-7 |
+| A PR number and a Jira key (`84239 TRACING-1234`) | Final status collection | Steps 8-9 only |
+| A PR number, no Jira key | Final status collection | Steps 8-9; ask for the tracker key first |
+| Nothing, or ambiguous | — | Ask which one before doing anything |
+
+The two modes run in separate sessions, usually days apart. Never run collection at the end of a setup run — see the note at the end of Step 7.
 
 ## Prerequisites
 
@@ -14,41 +27,11 @@ Set up stage testing for Red Hat build of OpenTelemetry release by creating a PR
 2. The `release` GitHub repository must be cloned in the workspace  
 3. Your GitHub fork of `openshift/release` must be configured as a remote
 4. The `gh` CLI must be authenticated
-5. The `oc` CLI must be logged into `app.ci` (`oc login --server=https://api.ci.l2s4.p1.openshiftapps.com:6443`) — needed for gcsweb/deck artifact access
+5. The `oc` CLI must be logged into `app.ci` (`oc login --server=https://api.ci.l2s4.p1.openshiftapps.com:6443`) — needed for gcsweb/deck artifact access, and for authoritative results in Step 8. If the user won't log in, Step 8 has a `gh`-only fallback with stated limitations.
 
 ## CI Jobs in Release Repository
 
-The OpenShift CI jobs for OpenTelemetry stage testing are defined in the `release` repository:
-
-**Location:** `ci-operator/config/openshift/open-telemetry-opentelemetry-operator/`
-
-**File naming pattern:**
-```
-openshift-open-telemetry-opentelemetry-operator-main__opentelemetry-product-ocp-{VERSION}[-{VARIANT}]-stage.yaml
-```
-The `-{VARIANT}` segment is omitted entirely for Regular (e.g. `...ocp-4.19-stage.yaml`, not `...ocp-4.19--stage.yaml`).
-
-**Examples:**
-- `openshift-open-telemetry-opentelemetry-operator-main__opentelemetry-product-ocp-4.19-stage.yaml`
-- `openshift-open-telemetry-opentelemetry-operator-main__opentelemetry-product-ocp-4.22-fips-stage.yaml`
-- `openshift-open-telemetry-opentelemetry-operator-main__opentelemetry-product-ocp-4.14-arm-stage.yaml`
-
-**List all stage test configs:**
-```bash
-ls release/ci-operator/config/openshift/open-telemetry-opentelemetry-operator/*stage.yaml
-```
-
-**Variants:**
-- **Regular:** `ocp-4.XX-stage.yaml` - Standard x86_64 tests
-- **FIPS:** `ocp-4.XX-fips-stage.yaml` - FIPS-enabled clusters
-- **ARM:** `ocp-4.XX-arm-stage.yaml` - ARM64 architecture tests
-
-**Job naming pattern:**
-```
-periodic-ci-openshift-open-telemetry-opentelemetry-operator-main-opentelemetry-product-ocp-{VERSION}-{VARIANT}-stage-opentelemetry-stage-tests
-```
-
-**Disconnected test job:** lives in a different project directory in the same `release` repo, not the one above — `ci-operator/config/openshift/distributed-tracing-qe/openshift-distributed-tracing-qe-main__ocp-4.16-disconnected.yaml`, job name `periodic-ci-openshift-distributed-tracing-qe-main-ocp-4.16-disconnected-distributed-tracing-tests-disconnected`. It needs both `MULTISTAGE_PARAM_OVERRIDE_OTEL_INDEX_IMAGE` and `MULTISTAGE_PARAM_OVERRIDE_TEMPO_INDEX_IMAGE` updated the same way as the other configs — it's part of the same PR, just a different file. Its `cron: 0 0 30 2 *` (an impossible date) is intentional: every one of these jobs is on-demand only, triggered via `/pj-rehearse` or Gangway, never on a schedule.
+Config file locations, naming patterns, variants (regular/FIPS/ARM), job-name patterns, and the separately-located disconnected job: see [references/ci-job-layout.md](references/ci-job-layout.md). Read it before Step 1.
 
 ## Steps
 
@@ -72,7 +55,7 @@ For each OCP version in the IIB mapping, update the corresponding stage test con
 
 **Changes to make:**
 1. Update `MULTISTAGE_PARAM_OVERRIDE_OTEL_INDEX_IMAGE` to `brew.registry.redhat.io/rh-osbs/iib:{IIB_NUMBER}`
-2. Also update the disconnected test config (see Disconnected test job above) with the matching `MULTISTAGE_PARAM_OVERRIDE_OTEL_INDEX_IMAGE` and `MULTISTAGE_PARAM_OVERRIDE_TEMPO_INDEX_IMAGE` — same PR, same IIB values.
+2. Also update the disconnected test config (see "Disconnected test job" in [references/ci-job-layout.md](references/ci-job-layout.md)) with the matching `MULTISTAGE_PARAM_OVERRIDE_OTEL_INDEX_IMAGE` and `MULTISTAGE_PARAM_OVERRIDE_TEMPO_INDEX_IMAGE` — same PR, same IIB values.
 
 **IMPORTANT:**
 - Only update files for OCP versions that exist in the IIB mapping
@@ -132,7 +115,7 @@ periodic-ci-openshift-distributed-tracing-qe-main-ocp-4.16-disconnected-distribu
 /pj-rehearse periodic-ci-openshift-open-telemetry-opentelemetry-operator-main-opentelemetry-product-ocp-4.19-stage-opentelemetry-stage-tests periodic-ci-openshift-open-telemetry-opentelemetry-operator-main-opentelemetry-product-ocp-4.20-stage-opentelemetry-stage-tests
 ```
 
-### Step 7: Report Results
+### Step 7: Report Setup Results
 
 Provide the user with:
 1. PR URL
@@ -140,74 +123,12 @@ Provide the user with:
 3. IIB mappings used
 4. Rehearsal jobs triggered
 
+Testing is now in progress. Steps 8-9 are a separate, later pass — do NOT run them here. Jobs take hours, are rerun after fixes, and more `/pj-rehearse` rounds usually follow. A status collected now is wrong by the time anyone reads it.
+
+## Final Status Collection
+
+Steps 8-9 — collecting each rehearsed job's final result and posting the table to the Jira tracker. Full procedure in [references/final-status-collection.md](references/final-status-collection.md); read it when running collection mode.
+
 ## Browsing CI Job Logs and Artifacts
 
-### Understanding Test Structure in CI Configs
-
-The CI configuration files define tests in the `tests:` section. Each test has:
-- `as:` - Test name (e.g., `opentelemetry-stage-tests`)
-- `steps.test:` - List of step refs that execute (e.g., `distributed-tracing-tests-opentelemetry-stage`)
-
-**Example from a config file:**
-```yaml
-tests:
-- as: opentelemetry-stage-tests
-  steps:
-    test:
-    - ref: distributed-tracing-install-otel-konflux-catalogsource
-    - ref: install-operators
-    - ref: distributed-tracing-tests-opentelemetry-stage
-```
-
-The step refs correspond to step registry entries in `ci-operator/step-registry/`.
-
-### Checking the qe-agent Step Before Manual Log Digging
-
-Every stage job also runs an `openshift-observability-qe-agent` step that reruns failures, diagnoses flaky vs. regression, applies fixes, and can auto-file a Jira bug — check it first, at `artifacts/{test-name}/openshift-observability-qe-agent/`.
-
-1. Read that step's `build-log.txt` to see which path it took:
-   - `"Test failures detected — proceeding with qe-agent analysis."` — it ran. Read `artifacts/qe-agent-analysis.md` for the diagnosis (FLAKY vs. REGRESSION), root cause, and rerun results. Check `artifacts/test-fixes/` for any fix applied, and `artifacts/jira-issue-key.txt` for an auto-filed bug.
-   - `"All tests passed — no failures detected. Skipping qe-agent."` — the job actually passed; nothing to investigate.
-   - Any other `"skipping qe-agent"` line (missing context file, Claude CLI, `AGENT_SKILL`, or a skill fetch/size error) — it didn't get to run despite a real failure. Fall back to the failing test step's own `build-log.txt` and JUnit XML directly (see below).
-
-### Browsing Test Artifacts via gcsweb
-
-After jobs run, their artifacts (logs, test results, cluster state) are stored in GCS and browsable via gcsweb.
-
-**Authentication:**
-gcsweb requires an OpenShift OAuth token, not a Kubernetes ServiceAccount token — `oc login` to `app.ci` first (console: `https://console-openshift-console.apps.ci.l2s4.p1.openshiftapps.com/` → username menu → Copy login command), then:
-```bash
-printf 'Authorization: Bearer %s\n' "$(oc whoami -t)" | curl -H @- <gcsweb-url>
-```
-(reads the header from stdin — keeps the token out of argv/`ps`/shell history)
-
-**URL Pattern:**
-```
-https://gcsweb-qe-private-deck-ci.apps.ci.l2s4.p1.openshiftapps.com/gcs/qe-private-deck/pr-logs/pull/{repo}/{pr-number}/{job-name}/{build-id}/artifacts/{test-name}/{step-name}/
-```
-
-**Example:**
-```
-https://gcsweb-qe-private-deck-ci.apps.ci.l2s4.p1.openshiftapps.com/gcs/qe-private-deck/pr-logs/pull/openshift_release/84173/rehearse-84173-periodic-ci-openshift-open-telemetry-opentelemetry-operator-main-opentelemetry-product-ocp-4.21-stage-opentelemetry-stage-tests/2092950588802207744/artifacts/opentelemetry-stage-tests/distributed-tracing-tests-opentelemetry-stage/
-```
-
-**URL Components:**
-- `{repo}`: `openshift_release` (for PRs to openshift/release)
-- `{pr-number}`: PR number (e.g., `84173`)
-- `{job-name}`: Full job name with `rehearse-{pr-number}-` prefix
-- `{build-id}`: Unique build ID (e.g., `2092950588802207744`)
-- `{test-name}`: The `as:` field from CI config (e.g., `opentelemetry-stage-tests`)
-- `{step-name}`: The `ref:` field from CI config (e.g., `distributed-tracing-tests-opentelemetry-stage`)
-
-**Finding the Build ID:**
-1. After `/pj-rehearse`, the bot comments with job links
-2. Click on a job link to see the prow dashboard
-3. The build ID is in the URL or shown as "Build ID" on the page
-
-**Browsing Artifacts:**
-Navigate through gcsweb to find:
-- `build-log.txt` - Container/step logs
-- `sidecar-logs.json` - Detailed logs from sidecar containers, important for debugging test failures
-- `finished.json` - Job completion metadata
-- `junit/` - JUnit XML test results
-- Custom artifacts created by the test steps
+When a job fails and you need to dig into logs, JUnit XML, or the `openshift-observability-qe-agent` diagnosis, see [references/browsing-artifacts.md](references/browsing-artifacts.md) — gcsweb URL patterns, authentication, and which artifact to read first.

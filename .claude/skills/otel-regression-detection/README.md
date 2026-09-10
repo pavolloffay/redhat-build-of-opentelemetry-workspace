@@ -16,7 +16,7 @@ Automated system that detects upstream regressions in OpenTelemetry repos compar
 
 ## Run locally
 
-Before running locally, check the latest [CI run](../../actions/workflows/regression-detection.yml) — if the report is recent enough, download the artifact instead to save tokens.
+Before running locally, check `reports/` on `main` — CI commits its reports there directly, so `git pull` may already have what you need instead of spending tokens on a fresh run.
 
 ```
 # Full regression detection
@@ -31,7 +31,7 @@ Before running locally, check the latest [CI run](../../actions/workflows/regres
 
 ## Run in CI
 
-The GitHub Actions workflow (`.github/workflows/regression-detection.yml`) checks weekly for new upstream operator releases and runs automatically when a new release is detected. It invokes the same skill headlessly:
+The GitHub Actions workflow (`.github/workflows/regression-detection.yml`) runs automatically roughly every six weeks (1st of Jan/Apr/Jul/Oct, 15th of Feb/May/Aug/Nov, all at 07:57 UTC), regardless of whether the upstream operator version has changed. It invokes the same skill headlessly:
 
 ```bash
 claude -p "/otel-regression-detection --method changelog" \
@@ -46,19 +46,15 @@ It can also be triggered manually via the **Run workflow** button on the [Action
 ## Cost controls
 
 - **Budget cap**: $25 per run (enforced via `--max-budget-usd 25`)
-- **CI schedule**: runs only when a new upstream release is detected (checked weekly)
+- **CI schedule**: runs roughly every six weeks (8 times a year), regardless of whether the upstream operator version changed — reports are large, so more frequent runs would outpace the time needed to act on them
 - **Single-method runs**: use `--method <name>` for targeted, lower-cost checks
-- **Check CI first**: download the latest CI artifact before running locally
+- **Check CI first**: `git pull` and check `reports/` for a recent enough report before running locally
 
 ## Output
 
-Reports are written to `reports/`:
-- `regression-report-YYYY-MM-DD.html` — self-contained HTML report with findings by severity (open in a browser)
-- `regression-summary-YYYY-MM-DD.json` — machine-readable summary counts
-
-Example output:
-
-![Example regression detection report](example-report.png)
+Reports are written to `reports/` and committed by CI directly to `main` (also uploaded as a per-run GitHub Actions artifact). Both filenames embed the *upstream* operator version the report analyzes — the latest release tag reachable from origin/main in the operator repo, not the downstream base version:
+- `regression-summary-v<operator_version>-YYYY-MM-DD.json` — machine-readable summary counts
+- `regression-detection-v<operator_version>-YYYY-MM-DD.md` — Markdown rendering of the findings, readable directly by humans, grouped by severity (Critical/High/Medium/Low) with a Contents section for quick navigation and each finding's metadata rendered as a table. Ends with a **Skill Improvement Recommendations** section listing any deviations the run's agents hit against this skill's own instructions (`None.` if all worked as written) — feedback for improving the skill over time. This is the only report format — there is no HTML report.
 
 ## How it stays current
 

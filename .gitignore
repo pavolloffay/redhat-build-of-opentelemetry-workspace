@@ -14,5 +14,5 @@ distributed-tracing-qe/
 release/
 konflux/
 
-# Regression detection
-reports/
+# Regression detection — reports are committed; only the CI bookkeeping marker is ignored
+reports/.last-reported-version

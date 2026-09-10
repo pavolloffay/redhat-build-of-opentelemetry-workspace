@@ -9,6 +9,23 @@ export const meta = {
   ],
 }
 
+// Shared by every agent's schema and appended to every agent's prompt (see
+// DEVIATIONS_INSTRUCTION below) — the Synthesize phase collects all of it
+// into the report's "Skill Improvement Recommendations" section, so drift
+// between what this workflow assumes and what's actually true in the repos
+// gets surfaced for someone to fix in the workflow/skill itself, run after run.
+const DEVIATIONS_PROPERTY = {
+  deviations: {
+    type: 'array',
+    items: { type: 'string' },
+    description: 'Short notes on anywhere the actual approach differed from the prompt instructions as written (a command/path/pattern that needed a workaround, a wrong assumption, a skipped/improvised step, etc). Empty array if none.',
+  },
+}
+
+const DEVIATIONS_INSTRUCTION = `
+
+Also return "deviations": an array of short notes on anywhere your actual approach differed from these instructions as written — a command, path, or pattern that didn't work as described and needed a workaround, an assumption above that turned out wrong, a step you had to skip or improvise around, etc. Empty array if everything worked exactly as written. This feeds into a report section that helps improve this workflow's instructions over time — be specific and factual, not speculative.`
+
 const DISCOVERY_SCHEMA = {
   type: 'object',
   properties: {
@@ -43,8 +60,27 @@ const DISCOVERY_SCHEMA = {
         required: ['type', 'doc_file'],
       },
     },
+    ...DEVIATIONS_PROPERTY,
   },
-  required: ['collector_version', 'operator_base_commit', 'operator_base_version', 'release_branch', 'components', 'documented_but_missing'],
+  required: ['collector_version', 'operator_base_commit', 'operator_base_version', 'release_branch', 'components', 'documented_but_missing', 'deviations'],
+}
+
+const SETUP_SCHEMA = {
+  type: 'object',
+  properties: {
+    operator_ok: { type: 'boolean', description: 'operator repo exists as a git repository' },
+    contrib_ok: { type: 'boolean' },
+    core_ok: { type: 'boolean' },
+    docs_ok: { type: 'boolean', description: 'false if the docs repo path was not provided or does not exist — not an error, doc validation is skipped' },
+    qe_ok: { type: 'boolean', description: 'false if the QE repo path was not provided or does not exist — not an error, QE coverage will show none' },
+    operator_base_ref_ok: { type: 'boolean', description: 'the discovered operator base commit/tag resolves in the operator repo' },
+    contrib_base_ref_ok: { type: 'boolean' },
+    core_base_ref_ok: { type: 'boolean' },
+    upstream_operator_version: { type: 'string', description: 'the latest release tag reachable from origin/main in the operator repo (e.g. "v0.160.0") — this is the upstream version the report is generated against, distinct from the downstream base version. Empty string if no tag could be resolved.' },
+    error: { type: 'string', description: 'human-readable summary of anything missing or broken; empty string if nothing wrong' },
+    ...DEVIATIONS_PROPERTY,
+  },
+  required: ['operator_ok', 'contrib_ok', 'core_ok', 'docs_ok', 'qe_ok', 'operator_base_ref_ok', 'contrib_base_ref_ok', 'core_base_ref_ok', 'upstream_operator_version', 'error', 'deviations'],
 }
 
 const FINDINGS_SCHEMA = {
@@ -70,8 +106,9 @@ const FINDINGS_SCHEMA = {
       },
     },
     summary: { type: 'string' },
+    ...DEVIATIONS_PROPERTY,
   },
-  required: ['findings', 'summary'],
+  required: ['findings', 'summary', 'deviations'],
 }
 
 const COVERAGE_SCHEMA = {
@@ -143,14 +180,36 @@ const COVERAGE_SCHEMA = {
       },
       required: ['total_features', 'with_qe_test', 'with_no_test'],
     },
+    ...DEVIATIONS_PROPERTY,
   },
-  required: ['coverage_matrix', 'summary', 'test_change_findings', 'operator_feature_matrix', 'feature_summary'],
+  required: ['coverage_matrix', 'summary', 'test_change_findings', 'operator_feature_matrix', 'feature_summary', 'deviations'],
 }
 
 const REPORT_SCHEMA = {
   type: 'object',
   properties: {
-    report_html: { type: 'string' },
+    findings_rendered: {
+      type: 'array',
+      description: 'Deduplicated, ID-assigned findings — returned as flat data so a separate, non-agent step can render the AI-friendly Markdown report from the identical set/IDs without asking the model to hand-write the full document (a ~100+ finding Markdown document pushes a single completion past a practical output-length ceiling and can hang rather than cleanly error).',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          severity: { type: 'string', enum: ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'] },
+          category: { type: 'string' },
+          component: { type: 'string' },
+          component_type: { type: 'string' },
+          detection_methods: { type: 'array', items: { type: 'string' } },
+          title: { type: 'string' },
+          description: { type: 'string' },
+          upstream_pr: { type: 'string' },
+          affected_config_fields: { type: 'array', items: { type: 'string' } },
+          has_test_coverage: { type: 'boolean' },
+          recommended_action: { type: 'string' },
+        },
+        required: ['id', 'severity', 'category', 'component', 'title', 'description', 'recommended_action'],
+      },
+    },
     summary_counts: {
       type: 'object',
       properties: {
@@ -163,18 +222,23 @@ const REPORT_SCHEMA = {
       required: ['critical', 'high', 'medium', 'low', 'total'],
     },
   },
-  required: ['report_html', 'summary_counts'],
+  required: ['findings_rendered', 'summary_counts'],
 }
 
-const konfluxPath = args.konflux_path
-const operatorPath = args.operator_path
-const contribPath = args.contrib_path
-const corePath = args.core_path
-const qePath = args.qe_path || ''
-const docsPath = args.docs_path || ''
-const method = args.method || 'all'
-const releaseVersion = args.release_version || ''
-const rhCollectorPath = args.rh_collector_path || ''
+// Defaults match the repo names `make clone-repos` creates at the workspace root — this
+// lets the workflow run standalone (e.g. via the auto-registered `/regression-detection`
+// command) without requiring the otel-regression-detection skill to resolve paths first.
+// docsPath/qePath may be reset to '' below in Setup if those optional repos aren't present.
+const a = args || {}
+const konfluxPath = a.konflux_path || 'konflux-opentelemetry'
+const operatorPath = a.operator_path || 'opentelemetry-operator'
+const contribPath = a.contrib_path || 'opentelemetry-collector-contrib'
+const corePath = a.core_path || 'opentelemetry-collector'
+const rhCollectorPath = a.rh_collector_path || 'redhat-opentelemetry-collector'
+let qePath = a.qe_path || 'distributed-tracing-qe'
+let docsPath = a.docs_path || 'openshift-docs'
+const method = a.method || 'all'
+const releaseVersion = a.release_version || ''
 
 // ── Phase 1: Discover ──
 // Everything is derived from konflux-opentelemetry:
@@ -252,7 +316,7 @@ Set has_doc=true if a match exists. Record the doc_file name.
 
 For doc files that don't match any manifest component, add to documented_but_missing.
 
-STEP 5: Return the complete discovery result.`, {
+STEP 5: Return the complete discovery result.${DEVIATIONS_INSTRUCTION}`, {
   label: 'discover-components',
   phase: 'Discover',
   schema: DISCOVERY_SCHEMA,
@@ -267,7 +331,129 @@ if (
   discovery.components.length === 0
 ) {
   log('ERROR: Discovery phase failed — could not extract build metadata from konflux-opentelemetry. Aborting.')
-  return { report_html: '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Regression Detection — Failed</title></head><body><h1>Regression Detection — Failed</h1><p>Discovery phase failed. Check that konflux-opentelemetry is cloned with --recurse-submodules and contains manifest.yaml.</p></body></html>', summary_counts: { critical: 0, high: 0, medium: 0, low: 0, total: 0 } }
+  return {
+    report_markdown: '# Regression Detection — Failed\n\nDiscovery phase failed. Check that konflux-opentelemetry is cloned with --recurse-submodules and contains manifest.yaml.',
+    summary_counts: { critical: 0, high: 0, medium: 0, low: 0, total: 0 },
+  }
+}
+
+// Renders the AI-friendly Markdown report deterministically from the agent's
+// already-deduplicated, ID-assigned findings_rendered — kept out of the
+// report-generation agent call because asking one completion to produce a
+// ~100+ finding report pushes it past a practical output-length ceiling and
+// can hang rather than cleanly error. This mirrors the coverage-matrix
+// blocks above: data that doesn't need creative synthesis is templated in JS.
+//
+// Severity is the only top-level structure — with 60-100+ findings per
+// report, a reader needs to jump straight to "what's Critical" via the
+// Contents links without scanning past other groupings first.
+const SEVERITIES = [
+  { key: 'CRITICAL', title: 'Critical' },
+  { key: 'HIGH', title: 'High' },
+  { key: 'MEDIUM', title: 'Medium' },
+  { key: 'LOW', title: 'Low' },
+]
+
+// Mirrors GitHub's Markdown header-to-anchor slug algorithm (lowercase,
+// spaces to hyphens, strip anything else) — good enough for the plain-ASCII
+// headings this report generates, so '[text](#anchor)' links actually land.
+const anchor = (title) => title.toLowerCase().replace(/[^a-z0-9\s-]/g, '').trim().replace(/\s+/g, '-')
+
+function buildRemediationMarkdown(findings, meta) {
+  const { operatorBase, operatorVersion, upstreamOperatorVersion, contribBase, releaseBranch, componentsCount, documentedCount, summaryCounts, coverageMatrix, operatorFeatureMatrix, docDrift, deviations } = meta
+
+  const inlineList = (arr) => (arr && arr.length ? arr.join(', ') : '—')
+
+  const findingBlock = (f) => `#### ${f.id} — ${f.title}
+
+| Field | Value |
+|---|---|
+| Category | ${f.category} |
+| Component | ${f.component} |
+| Component type | ${f.component_type || '—'} |
+| Detection methods | ${inlineList(f.detection_methods)} |
+| Upstream PR | ${f.upstream_pr || '—'} |
+| Affected config fields | ${inlineList(f.affected_config_fields)} |
+| Has test coverage | ${f.has_test_coverage != null ? f.has_test_coverage : '—'} |
+
+Description: ${f.description}
+
+Recommended action: ${f.recommended_action}
+`
+
+  // A component/feature counts as covered if EITHER an upstream or a QE test
+  // exercises it — the product build runs both suites, so upstream-only
+  // coverage is still real coverage. Only flag a gap when neither exists.
+  const noCoverageComponents = (coverageMatrix || []).filter(c => c.upstream_test === 'none' && c.qe_test === 'none')
+  const noCoverageFeatures = (operatorFeatureMatrix || []).filter(f => f.upstream_test === 'none' && f.qe_test === 'none')
+  const hasCoverageGaps = noCoverageComponents.length > 0 || noCoverageFeatures.length > 0
+  const coverageGapsSection = hasCoverageGaps
+    ? `## Confirmed Coverage Gaps
+
+Components and operator features with no test at all — neither upstream nor QE. Anything with at least one of the two is considered covered, since the product build runs both suites.
+
+${noCoverageComponents.map(c => `- ${c.component} (${c.component_type}) — ${c.has_doc ? 'documented' : 'undocumented'}, no upstream or QE test`).join('\n')}
+${noCoverageFeatures.map(f => `- ${f.feature}${f.description ? ` — ${f.description}` : ''} — no upstream or QE test`).join('\n')}
+`
+    : ''
+
+  const hasDocDrift = docDrift && docDrift.length > 0
+  const driftSection = hasDocDrift
+    ? `## Documentation Drift
+
+Docs that exist but no longer match any component in the manifest.
+
+${docDrift.map(d => `- ${d.doc_file} (${d.type}) — doc exists but no matching component found in the manifest`).join('\n')}
+`
+    : ''
+
+  const severitySections = SEVERITIES.map(sev => {
+    const atSeverity = findings.filter(f => f.severity === sev.key)
+    return { ...sev, count: atSeverity.length, body: atSeverity.map(findingBlock).join('\n') }
+  })
+
+  const toc = [
+    ...severitySections.map(s => `- [${s.title} (${s.count})](#${anchor(s.title)})`),
+    hasCoverageGaps ? `- [Confirmed Coverage Gaps](#confirmed-coverage-gaps)` : null,
+    hasDocDrift ? `- [Documentation Drift](#documentation-drift)` : null,
+    `- [Skill Improvement Recommendations](#skill-improvement-recommendations)`,
+  ].filter(Boolean).join('\n')
+
+  const severityBody = severitySections
+    .map(s => `## ${s.title}\n\n${s.body || '(no findings at this severity)\n'}`)
+    .join('\n')
+
+  const deviationsSection = `## Skill Improvement Recommendations
+
+*(Deviations from skill steps as written — \`None.\` if everything worked as described.)*
+
+${deviations && deviations.length ? deviations.map(d => `- ${d}`).join('\n') : 'None.'}
+`
+
+  return `# Regression Detection Report
+
+## Metadata
+
+| Field | Value |
+|---|---|
+| Downstream base | operator \`${operatorBase}\` (v${operatorVersion}), collector \`${contribBase}\` |
+| Upstream target | origin/main (latest release: ${upstreamOperatorVersion}) |
+| Release branch | ${releaseBranch} |
+| Components in build | ${componentsCount} |
+| Documented components | ${documentedCount} |
+| Critical | ${summaryCounts.critical} |
+| High | ${summaryCounts.high} |
+| Medium | ${summaryCounts.medium} |
+| Low | ${summaryCounts.low} |
+| Total | ${summaryCounts.total} |
+
+## Contents
+
+${toc}
+
+${severityBody}
+
+${[coverageGapsSection, driftSection, deviationsSection].filter(Boolean).join('\n')}`
 }
 
 const collectorBaseVersion = discovery.collector_version
@@ -283,33 +469,61 @@ log(`Discovered ${components.length} components. Collector: v${collectorBaseVers
 
 // ── Phase 2: Setup ──
 phase('Setup')
-await agent(`You are setting up regression detection. Do the following:
+const setup = await agent(`You are setting up regression detection. Do the following:
 
-1. Verify these repos exist and are git repositories:
-   - Operator: ${operatorPath}
-   - Collector-contrib: ${contribPath}
-   - Collector-core: ${corePath}
-   ${docsPath ? `- Docs: ${docsPath}` : ''}
-   ${qePath ? `- QE tests: ${qePath}` : ''}
+1. Check whether these repos exist and are git repositories (e.g. "git -C <path> rev-parse --is-inside-work-tree"):
+   - Operator (required): ${operatorPath}
+   - Collector-contrib (required): ${contribPath}
+   - Collector-core (required): ${corePath}
+   - Docs (optional): ${docsPath}
+   - QE tests (optional): ${qePath}
 
-2. Run "git fetch origin main" in each upstream repo to get latest state.
+2. For each repo that exists, run "git fetch origin main" to get latest state. Skip repos that don't exist — that is not an error for the optional docs/QE repos.
 
-3. Verify these base refs exist:
+3. For the required repos that exist, verify these base refs resolve, using "git rev-parse --verify <ref>" (for tags also try "git tag -l <tag>"):
    - In operator repo: ${operatorBase} (this may be a commit hash, not a tag)
    - In collector-contrib repo: ${contribBase}
    - In collector-core repo: ${coreBase}
-   Use "git rev-parse --verify <ref>" to check. For tags, also try "git tag -l <tag>".
 
-4. Get the current HEAD commit hash for origin/main in each repo using "git rev-parse origin/main".
+4. Get the current HEAD commit hash for origin/main in each repo that exists, using "git rev-parse origin/main".
 
-5. Return a summary of repos, tags, and HEAD commits.
+5. Resolve the upstream operator version — the latest release tag reachable from origin/main in the operator repo (NOT the downstream base version, and NOT necessarily the single latest tag in the repo if origin/main is behind some other branch's tag):
+   git -C ${operatorPath} fetch --tags origin
+   git -C ${operatorPath} tag --sort=-v:refname --merged origin/main | head -1
+   If this returns nothing (no tags reachable), fall back to the short commit hash of origin/main. Return this as upstream_operator_version.
 
-Do NOT modify working trees or checkout branches.`, {
+6. Return operator_ok/contrib_ok/core_ok/docs_ok/qe_ok (whether each repo exists as a git repo — docs_ok/qe_ok are false, not an error, if the path wasn't usable), operator_base_ref_ok/contrib_base_ref_ok/core_base_ref_ok (whether each base ref resolved), upstream_operator_version (from step 5), and error (a short human-readable summary of anything missing or broken, empty string if nothing is wrong).
+
+Do NOT modify working trees or checkout branches.${DEVIATIONS_INSTRUCTION}`, {
   label: 'setup',
   phase: 'Setup',
+  schema: SETUP_SCHEMA,
 })
 
-log(`Setup complete. Analyzing ${operatorBase} / ${contribBase} → upstream HEAD.`)
+if (
+  !setup ||
+  !setup.operator_ok || !setup.contrib_ok || !setup.core_ok ||
+  !setup.operator_base_ref_ok || !setup.contrib_base_ref_ok || !setup.core_base_ref_ok
+) {
+  const msg = `Setup phase failed — a required repo or base ref is missing.${setup && setup.error ? ' ' + setup.error : ''} Required repos: operator (${operatorPath}), collector-contrib (${contribPath}), collector-core (${corePath}) — run "make clone-repos" if any are missing. Required base refs: operator ${operatorBase}, collector-contrib ${contribBase}, collector-core ${coreBase}.`
+  log(`ERROR: ${msg}`)
+  return {
+    report_markdown: `# Regression Detection — Failed\n\n${msg}`,
+    summary_counts: { critical: 0, high: 0, medium: 0, low: 0, total: 0 },
+  }
+}
+
+// Optional repos degrade gracefully rather than aborting — null out the path so the
+// downstream ternaries that gate doc-validation/QE-coverage instructions see them as absent.
+if (!setup.docs_ok) docsPath = ''
+if (!setup.qe_ok) qePath = ''
+
+// The report is named after the upstream version it was generated against, not the
+// downstream base — fall back to the downstream version only if resolution failed,
+// so the workflow never returns an unusable empty filename segment.
+const upstreamOperatorVersion = setup.upstream_operator_version || operatorVersion
+
+log(`Setup complete. Analyzing ${operatorBase} / ${contribBase} → upstream HEAD (${upstreamOperatorVersion}).${!setup.docs_ok ? ' Docs repo unavailable — skipping doc validation.' : ''}${!setup.qe_ok ? ' QE repo unavailable — QE coverage will show none.' : ''}`)
 
 // Build the list of source dirs for code-diff and doc-validation agents
 const contribComponents = components.filter(c => c.repo === 'collector_contrib')
@@ -509,24 +723,25 @@ ${componentList}
 
 INSTRUCTIONS:
 
-1. FOR EACH COMPONENT, determine test coverage:
+1. FOR EACH COMPONENT, first resolve its actual OTel type key(s) — pipeline YAML references a component by the \`type:\` value from its metadata.yaml (e.g. "jaeger", "otlp", "batch", "k8s_attributes"), which is very often SHORTER than and different from the Go package/directory name ("jaeger" not "jaegerreceiver", "batch" not "batchprocessor", "k8s_attributes" not "k8sattributesprocessor"). Searching for the directory name instead of the real type key is the single most common cause of false "no test" results in this matrix — every component in a prior run of this check that used the directory name came back with zero matches even for components with 50-300+ real test references under their correct type key. Do not skip this step:
 
-   a. Check for a DEDICATED upstream test directory:
-      ls -d ${operatorPath}/tests/e2e*/<component_short_name>/ 2>/dev/null
-      ls -d ${operatorPath}/tests/e2e*/<component_dir_name>/ 2>/dev/null
-      If found: upstream_test = "dedicated", upstream_test_path = the path found.
+      grep -E "^(type|deprecated_type):" <repo>/<source_dir>/metadata.yaml
 
-   b. If no dedicated test, check for IMPLICIT coverage (component name in any YAML):
-      grep -rl "<component_short_name>" ${operatorPath}/tests/ 2>/dev/null | head -3
+      (repo is collector-contrib or collector-core per the component's \`repo\` field). Collect both \`type\` (canonical) and \`deprecated_type\` (old alias, if present — some existing tests may still use it) as search candidates, alongside the directory name itself (test directories are inconsistently named — some use the short type, e.g. "filelog", others the full package name, e.g. "hostmetricsreceiver" — so try all candidates, don't assume one convention).
+
+   a. Check for a DEDICATED test directory, trying every name candidate:
+      ls -d ${operatorPath}/tests/e2e*/<candidate>/ 2>/dev/null
+      If any candidate matches: upstream_test = "dedicated", upstream_test_path = the path found.
+
+   b. If no dedicated test, check for IMPLICIT coverage — the component referenced as a pipeline entry (a bare YAML key like \`<type_key>:\`, a named instance like \`<type_key>/name:\`, or inside a receivers/processors/exporters/connectors list like \`[<type_key>]\`) — for every name candidate:
+      grep -rlE "<type_key>(/[A-Za-z0-9_.-]+)?:|\\[.*\\b<type_key>\\b.*\\]" ${operatorPath}/tests/ 2>/dev/null | head -3
       If found: upstream_test = "implicit", upstream_test_path = first match.
 
-   c. If neither: upstream_test = "none".
+   c. If nothing matches for any candidate: upstream_test = "none".
 
-   d. Repeat for QE tests:
-      ${qePath ? `ls -d ${qePath}/tests/e2e-otel/<component_short_name>/ 2>/dev/null
-      grep -rl "<component_short_name>" ${qePath}/tests/ 2>/dev/null | head -3` : 'Skip — QE repo not available.'}
-
-   The component_short_name is the last part of source_dir (e.g., "jaegerreceiver" from "receiver/jaegerreceiver").
+   d. Repeat a-c for QE tests:
+      ${qePath ? `ls -d ${qePath}/tests/e2e-otel/<candidate>/ 2>/dev/null
+      grep -rlE "<type_key>(/[A-Za-z0-9_.-]+)?:|\\[.*\\b<type_key>\\b.*\\]" ${qePath}/tests/ 2>/dev/null | head -3` : 'Skip — QE repo not available.'}
 
 2. DETECT UPSTREAM TEST CHANGES since the downstream base:
    Run: git diff ${operatorBase}..origin/main --stat -- tests/
@@ -540,14 +755,16 @@ INSTRUCTIONS:
    a. Discover the feature list dynamically:
       ls -d ${operatorPath}/tests/e2e-*/
       Exclude the generic harness dirs: "e2e" (bare), "test-e2e-apps", "step-templates".
-      Each remaining "e2e-<name>" directory IS a dedicated upstream test suite for that feature — so upstream_test is always "dedicated" for every discovered feature (that's expected, not a bug: the point of this section is the QE/downstream column, not the upstream one).
+      Each remaining "e2e-<name>" directory IS a dedicated upstream test suite for that feature — so upstream_test is always "dedicated" for every discovered feature (that's expected, not a bug).
 
    b. For each discovered feature, derive a short human-readable name and one-line description from the directory name (e.g. "e2e-targetallocator" -> feature "target-allocator", "e2e-opampbridge" -> feature "opamp-bridge", "e2e-autoscale" -> feature "autoscaling").
 
-   c. For each feature, check downstream QE coverage:
-      ${qePath ? `grep -rl "<feature keyword>" ${qePath}/tests/ 2>/dev/null | head -3
+   c. For each feature, check downstream QE coverage. Derive 2-4 plausible search terms from the feature name AND its description, not a single literal keyword — feature names are paraphrased and rarely appear verbatim in test file names or content (e.g. for "automatic-rbac": try "rbac", "ClusterRole", "leader.elect", "privilege"; for "autoscaling": try "autoscal", "HorizontalPodAutoscaler", "hpa"; for "target-allocator-mtls": try "targetallocator.*mtls", "ta.*mtls", "target-allocator-collector-mtls"):
+      ${qePath ? `grep -rliE "<term1>|<term2>|<term3>" ${qePath}/tests/ 2>/dev/null | head -5
       Search across ${qePath}/tests/ (not just tests/e2e-otel/, which is component-focused — operator-feature tests may live in other suites under tests/), but stay within that tests/ tree. A match only counts as coverage if it's an actual test file or test fixture (a Go test file, a Ginkgo/Chainsaw test spec, a test-case YAML) — a mention in a README, doc, comment, or CI pipeline config does NOT count as coverage.
-      If a clear match exists: qe_test = "dedicated" (a directory/file clearly dedicated to this feature) or "implicit" (feature mentioned within a broader test). If no qualifying match: qe_test = "none".` : 'QE repo not available — set qe_test to "none" for all features.'}
+      If a clear match exists: qe_test = "dedicated" (a directory/file clearly dedicated to this feature) or "implicit" (feature mentioned within a broader test). Only conclude qe_test = "none" after trying multiple search terms — a single miss doesn't mean the feature is untested.` : 'QE repo not available — set qe_test to "none" for all features.'}
+
+      IMPORTANT — do not treat "no QE test" alone as a coverage gap: the product build runs BOTH the upstream operator's own e2e-* suites AND the downstream QE suite, so a feature with dedicated upstream coverage (true for every feature discovered in step a) is already exercised by the product's own test run even when QE has no test of its own. Do NOT add a test_change_finding (or any other finding) recommending "add a QE test for <feature>" just because qe_test is "none" while upstream_test is "dedicated" or "implicit" — that is expected, not a gap. Only raise a finding for a feature when BOTH upstream_test and qe_test are "none".
 
    d. Return operator_feature_matrix (one entry per discovered feature) and feature_summary (total_features, with_qe_test, with_no_test).
 
@@ -561,12 +778,12 @@ INSTRUCTIONS:
 // Run analysis agents and coverage agent separately to avoid positional result splitting
 const analysisResults = analysisMethods.length > 0
   ? await parallel(analysisMethods.map(m => () =>
-      agent(m.prompt, { label: m.label, phase: 'Analyze', schema: FINDINGS_SCHEMA })
+      agent(m.prompt + DEVIATIONS_INSTRUCTION, { label: m.label, phase: 'Analyze', schema: FINDINGS_SCHEMA })
     ))
   : []
 
 const coverageResult = coveragePrompt
-  ? await agent(coveragePrompt.prompt, { label: coveragePrompt.label, phase: 'Analyze', schema: COVERAGE_SCHEMA })
+  ? await agent(coveragePrompt.prompt + DEVIATIONS_INSTRUCTION, { label: coveragePrompt.label, phase: 'Analyze', schema: COVERAGE_SCHEMA })
   : null
 
 log(`Analysis complete. ${analysisMethods.length} regression methods + ${coverageResult ? '1 coverage matrix' : 'no coverage'} returned.`)
@@ -590,215 +807,36 @@ if (coverageResult && coverageResult.test_change_findings) {
   })
 }
 
-const escapeHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-
 // Findings carry free text sourced from upstream changelogs, GitHub issues, and PR
-// titles. That text flows into the report-generation prompt below and ultimately
-// into report_html, which is a self-contained HTML document opened directly in a
-// browser (unlike the old markdown report, nothing else escapes it downstream) —
-// so escape every free-text field here, before it ever reaches that prompt.
-const allFindingsSafe = allFindings.map(f => ({
-  ...f,
-  title: f.title != null ? escapeHtml(f.title) : f.title,
-  description: f.description != null ? escapeHtml(f.description) : f.description,
-  component: f.component != null ? escapeHtml(f.component) : f.component,
-  recommended_action: f.recommended_action != null ? escapeHtml(f.recommended_action) : f.recommended_action,
-  upstream_pr: f.upstream_pr != null ? escapeHtml(f.upstream_pr) : f.upstream_pr,
-  affected_config_fields: (f.affected_config_fields || []).map(escapeHtml),
-}))
-
-const findingsSummary = allFindingsSafe.map(f =>
+// titles. It's assembled here (not escaped) since it only ever flows into the
+// report-generation prompt (plain text, read by the model) and the Markdown report —
+// no HTML rendering happens anywhere in this workflow.
+const findingsSummary = allFindings.map(f =>
   `[${f.severity}] [${f.category}] ${f.component}: ${f.title} (via: ${f.detection_method})`
 ).join('\n')
 
-// Build the coverage data for the report. The matrices/bars/callouts below are
-// pre-rendered here in JS (not left to the report-generation agent) because this
-// data doesn't need creative synthesis, and pre-rendering guarantees every row
-// appears — no risk of the model summarizing or truncating a long table.
+// Coverage data needed by buildRemediationMarkdown — kept as raw structured data (not
+// pre-rendered strings) since the Markdown renderer builds its own sections from it.
 const coverageMatrix = coverageResult ? coverageResult.coverage_matrix : []
 const coverageSummary = coverageResult ? coverageResult.summary : null
 const operatorFeatureMatrix = coverageResult ? (coverageResult.operator_feature_matrix || []) : []
 const featureSummary = coverageResult ? coverageResult.feature_summary : null
 
-const hasAnyTest = (row) => row.upstream_test !== 'none' || row.qe_test !== 'none'
+// Collected from every agent's self-reported `deviations` (see DEVIATIONS_INSTRUCTION)
+// into the report's "Skill Improvement Recommendations" section — a running record of
+// where this workflow's own instructions didn't match reality, for whoever maintains it.
+const allDeviations = [
+  ...(discovery.deviations || []).map(d => `[discover] ${d}`),
+  ...(setup.deviations || []).map(d => `[setup] ${d}`),
+  ...analysisResults.flatMap((r, i) => (r && r.deviations || []).map(d => `[${analysisMethods[i].key}] ${d}`)),
+  ...((coverageResult && coverageResult.deviations) || []).map(d => `[test-coverage] ${d}`),
+]
 
-const COMPONENT_TYPE_ORDER = ['receiver', 'processor', 'exporter', 'connector', 'extension']
-const COMPONENT_TYPE_LABELS = { receiver: 'Receivers', processor: 'Processors', exporter: 'Exporters', connector: 'Connectors', extension: 'Extensions' }
+const report = await agent(`You are synthesizing regression detection findings into structured data. Do NOT write Markdown yourself — a separate, non-agent step renders the report mechanically from the structured data you return here. Your job is dedup, classification, and grouping only.
 
-const componentBarsHtml = COMPONENT_TYPE_ORDER.map(t => {
-  const rows = coverageMatrix.filter(c => c.component_type === t)
-  if (rows.length === 0) return ''
-  const covered = rows.filter(hasAnyTest).length
-  const pct = Math.round((covered / rows.length) * 100)
-  return `<div class="bar-row"><span>${COMPONENT_TYPE_LABELS[t]}</span><div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div><span>${covered} / ${rows.length}</span></div>`
-}).filter(Boolean).join('\n')
-const componentBarsBlock = componentBarsHtml ? `<div class="bars">\n${componentBarsHtml}\n</div>` : ''
-
-const noCoverageComponents = coverageMatrix.filter(c => c.upstream_test === 'none' && c.qe_test === 'none')
-const componentCalloutBlock = noCoverageComponents.length > 0
-  ? `<div class="callout"><strong>⚠️ Components with no test coverage (${noCoverageComponents.length} of ${coverageMatrix.length})</strong><ul>\n${noCoverageComponents.map(c =>
-      `<li><strong>${escapeHtml(c.component)}</strong> (${c.component_type}) — ${c.has_doc ? 'documented' : 'undocumented'}, no upstream or QE test</li>`
-    ).join('\n')}\n</ul></div>`
-  : ''
-
-const componentMatrixHtml = COMPONENT_TYPE_ORDER.map(t => {
-  const rows = coverageMatrix.filter(c => c.component_type === t)
-  if (rows.length === 0) return ''
-  const trs = rows.map(c => {
-    const none = c.upstream_test === 'none' && c.qe_test === 'none'
-    const nameCell = none ? `${escapeHtml(c.component)} <span class="tag-none">NONE</span>` : escapeHtml(c.component)
-    return `<tr${none ? ' class="none"' : ''}><td>${nameCell}</td><td>${c.has_doc ? 'Yes' : 'No'}</td><td>${c.upstream_test}</td><td>${c.qe_test}</td></tr>`
-  }).join('\n')
-  return `<div class="matrix-group"><h4 class="group">${COMPONENT_TYPE_LABELS[t]} (${rows.length})</h4><table><thead><tr><th>Component</th><th>Documented</th><th>Upstream Test</th><th>QE Test</th></tr></thead><tbody>\n${trs}\n</tbody></table></div>`
-}).filter(Boolean).join('\n')
-const componentMatrixBlock = coverageMatrix.length > 0
-  ? `<details class="matrix"><summary>Show full coverage matrix (${coverageMatrix.length} components)</summary>\n${componentMatrixHtml}\n</details>`
-  : ''
-
-// Operator features: same pre-rendering treatment as components above.
-const featureCovered = operatorFeatureMatrix.filter(f => f.qe_test !== 'none').length
-const featurePct = operatorFeatureMatrix.length ? Math.round((featureCovered / operatorFeatureMatrix.length) * 100) : 0
-const featureBarsBlock = operatorFeatureMatrix.length
-  ? `<div class="bars">\n<div class="bar-row"><span>Operator features</span><div class="bar-track"><div class="bar-fill" style="width:${featurePct}%"></div></div><span>${featureCovered} / ${operatorFeatureMatrix.length}</span></div>\n</div>`
-  : ''
-
-const noCoverageFeatures = operatorFeatureMatrix.filter(f => f.qe_test === 'none')
-const featureCalloutBlock = noCoverageFeatures.length > 0
-  ? `<div class="callout"><strong>⚠️ Operator features with no QE test (${noCoverageFeatures.length} of ${operatorFeatureMatrix.length})</strong><ul>\n${noCoverageFeatures.map(f =>
-      `<li><strong>${escapeHtml(f.feature)}</strong>${f.description ? ` — ${escapeHtml(f.description)}` : ''} — upstream: dedicated, no QE test</li>`
-    ).join('\n')}\n</ul></div>`
-  : ''
-
-const featureMatrixBlock = operatorFeatureMatrix.length > 0
-  ? `<details class="matrix"><summary>Show full operator feature matrix (${operatorFeatureMatrix.length} features)</summary>\n<table><thead><tr><th>Feature</th><th>Upstream Test</th><th>QE Test</th></tr></thead><tbody>\n${operatorFeatureMatrix.map(f => {
-      const none = f.qe_test === 'none'
-      const nameCell = none ? `${escapeHtml(f.feature)} <span class="tag-none">NONE</span>` : escapeHtml(f.feature)
-      return `<tr${none ? ' class="none"' : ''}><td>${nameCell}</td><td>${f.upstream_test}</td><td>${f.qe_test}</td></tr>`
-    }).join('\n')}\n</tbody></table>\n</details>`
-  : ''
-
-// The exact, validated design-system CSS — copied verbatim into every generated report
-// so visual output is deterministic across runs rather than left to model taste.
-const REPORT_CSS = `
-:root{
-  color-scheme: light;
-  --surface:#fcfcfb; --page:#f9f9f7; --border:rgba(11,11,11,0.10); --grid:#e1e0d9;
-  --text:#0b0b0b; --text-2:#52514e; --muted:#898781;
-  --accent:#2a78d6; --accent-tint:#cde2fb; --accent-tint-2:#9ec5f4;
-  --critical:#d03b3b; --serious:#ec835a; --warning:#fab219; --good:#0ca30c;
-  --critical-tint:#fbe4e4; --serious-tint:#fce4db; --warning-tint:#fef0d3; --good-tint:#dff3df;
-  --shadow-sm:0 1px 2px rgba(11,11,11,0.04); --shadow-md:0 10px 30px -12px rgba(11,11,11,0.18);
-}
-@media (prefers-color-scheme: dark){
-  :root{
-    color-scheme: dark;
-    --surface:#1a1a19; --page:#0d0d0d; --border:rgba(255,255,255,0.10); --grid:#2c2c2a;
-    --text:#ffffff; --text-2:#c3c2b7; --muted:#898781;
-    --accent:#3987e5; --accent-tint:#18314f; --accent-tint-2:#123055;
-    --critical:#d03b3b; --serious:#ec835a; --warning:#fab219; --good:#0ca30c;
-    --critical-tint:#3a1a1a; --serious-tint:#3a2416; --warning-tint:#3a2f10; --good-tint:#123a13;
-    --shadow-sm:0 1px 2px rgba(0,0,0,0.3); --shadow-md:0 14px 34px -14px rgba(0,0,0,0.55);
-  }
-}
-*{box-sizing:border-box}
-html{scroll-behavior:smooth}
-body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--page);color:var(--text);line-height:1.55;-webkit-font-smoothing:antialiased}
-.wrap{max-width:980px;margin:0 auto;padding:0 20px 90px}
-header.hero{margin:0 -20px 28px;padding:44px 20px 30px;background:radial-gradient(1200px 300px at 15% -20%, var(--accent-tint) 0%, transparent 60%),radial-gradient(900px 260px at 90% -30%, var(--accent-tint-2) 0%, transparent 55%),var(--surface);border-bottom:1px solid var(--border)}
-header.hero .eyebrow{font-size:.72rem;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);font-weight:700;margin-bottom:6px}
-header.hero h1{font-size:2rem;margin:0 0 12px;letter-spacing:-0.01em}
-.meta{display:flex;flex-wrap:wrap;gap:8px;color:var(--text-2);font-size:.85rem}
-.meta span{background:var(--surface);border:1px solid var(--border);border-radius:99px;padding:5px 12px;box-shadow:var(--shadow-sm)}
-nav.jump{position:sticky;top:0;z-index:20;background:color-mix(in srgb, var(--page) 88%, transparent);backdrop-filter:saturate(160%) blur(8px);-webkit-backdrop-filter:saturate(160%) blur(8px);padding:12px 0;border-bottom:1px solid var(--border);margin-bottom:32px;display:flex;gap:18px;flex-wrap:wrap;font-size:.85rem}
-nav.jump a{color:var(--text-2);text-decoration:none;font-weight:600;padding:4px 2px;border-bottom:2px solid transparent;transition:color .15s ease, border-color .15s ease}
-nav.jump a:hover{color:var(--accent);border-color:var(--accent)}
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:14px;margin-bottom:20px}
-.kpi{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px 16px;box-shadow:var(--shadow-sm);transition:transform .18s ease, box-shadow .18s ease}
-.kpi:hover{transform:translateY(-3px);box-shadow:var(--shadow-md)}
-.kpi .n{font-size:2.1rem;font-weight:650;line-height:1.05;font-variant-numeric:proportional-nums}
-.kpi .l{font-size:.75rem;color:var(--muted);margin-top:6px;display:flex;align-items:center;gap:6px}
-.kpi .dot{width:9px;height:9px;border-radius:50%;display:inline-block}
-.kpi.crit .n{color:var(--critical)} .kpi.crit .dot{background:var(--critical)}
-.kpi.high .n{color:var(--serious)} .kpi.high .dot{background:var(--serious)}
-.kpi.med .n{color:var(--warning)} .kpi.med .dot{background:var(--warning)}
-.kpi.low .n{color:var(--good)} .kpi.low .dot{background:var(--good)}
-.kpi.cov .n{color:var(--accent)} .kpi.cov .dot{background:var(--accent)}
-.dist{margin-bottom:36px}
-.dist .track{display:flex;gap:2px;height:14px;border-radius:7px;overflow:hidden;background:var(--grid)}
-.dist .seg{height:100%}
-.dist .seg.crit{background:var(--critical)} .dist .seg.high{background:var(--serious)} .dist .seg.med{background:var(--warning)} .dist .seg.low{background:var(--good)}
-.dist .legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;font-size:.78rem;color:var(--text-2)}
-.dist .legend span{display:inline-flex;align-items:center;gap:6px}
-.dist .legend i{width:8px;height:8px;border-radius:50%;display:inline-block}
-.dist .legend .crit i{background:var(--critical)} .dist .legend .high i{background:var(--serious)} .dist .legend .med i{background:var(--warning)} .dist .legend .low i{background:var(--good)}
-h2.section{font-size:1.15rem;margin:44px 0 16px;padding-bottom:10px;border-bottom:1px solid var(--grid);display:flex;align-items:center;gap:8px;scroll-margin-top:64px}
-.card{background:var(--surface);border:1px solid var(--border);border-left:4px solid transparent;border-radius:10px;padding:16px 20px;margin-bottom:12px;box-shadow:var(--shadow-sm);transition:transform .15s ease, box-shadow .15s ease}
-.card:hover{transform:translateX(2px);box-shadow:var(--shadow-md)}
-.card.crit{border-left-color:var(--critical)} .card.high{border-left-color:var(--serious)} .card.med{border-left-color:var(--warning)} .card.low{border-left-color:var(--good)}
-.card h3{margin:0 0 8px;font-size:1rem;font-weight:650}
-.badges{margin-bottom:8px;display:flex;gap:6px;flex-wrap:wrap}
-.badge{font-size:.7rem;font-weight:600;padding:3px 10px;border-radius:99px;background:var(--page);border:1px solid var(--border);color:var(--text-2)}
-.badge.id{font-family:ui-monospace,"SF Mono",Menlo,monospace;color:var(--muted);background:transparent;border-style:dashed}
-.badge.sev{color:var(--text)}
-.badge.sev.crit{background:var(--critical-tint)} .badge.sev.high{background:var(--serious-tint)} .badge.sev.med{background:var(--warning-tint)} .badge.sev.low{background:var(--good-tint)}
-.card .impact{margin:0 0 4px;color:var(--text)}
-.card details{margin-top:10px;font-size:.9rem;color:var(--text-2)}
-.card details summary{cursor:pointer;color:var(--accent);font-weight:600;margin-bottom:8px;list-style:none}
-.card details summary::-webkit-details-marker{display:none}
-.card details summary::before{content:"▸ "}
-.card details[open] summary::before{content:"▾ "}
-.card details ul{margin:6px 0;padding-left:18px}
-.card code{background:var(--page);border:1px solid var(--border);border-radius:4px;padding:1px 5px;font-size:.85em}
-.bars{display:flex;flex-direction:column;gap:12px;margin-bottom:24px}
-.bar-row{display:grid;grid-template-columns:150px 1fr 90px;align-items:center;gap:12px;font-size:.85rem}
-.bar-track{background:var(--accent-tint);border-radius:6px;height:10px;overflow:hidden}
-.bar-fill{background:var(--accent);height:100%;border-radius:6px}
-.bar-row span:last-child{font-variant-numeric:tabular-nums;color:var(--text-2)}
-.callout{border-radius:10px;padding:16px 20px;margin-bottom:24px;border:1px solid var(--critical);background:var(--critical-tint)}
-.callout strong{display:flex;align-items:center;gap:6px;margin-bottom:6px}
-.callout ul{margin:6px 0 0;padding-left:20px}
-table{width:100%;border-collapse:collapse;font-size:.85rem}
-th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--grid)}
-th{color:var(--muted);font-weight:600;font-size:.75rem;text-transform:uppercase;letter-spacing:.04em}
-td{font-variant-numeric:tabular-nums}
-tr:hover td{background:var(--page)}
-details.matrix{margin-bottom:20px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 18px;box-shadow:var(--shadow-sm)}
-details.matrix summary{cursor:pointer;font-weight:600;color:var(--accent);list-style:none}
-details.matrix summary::-webkit-details-marker{display:none}
-details.matrix summary::before{content:"▸ "}
-details.matrix[open] summary::before{content:"▾ "}
-details.matrix table{margin-top:14px}
-h3.subsection{font-size:.72rem;margin:26px 0 10px;color:var(--text-2);font-weight:700;text-transform:uppercase;letter-spacing:.04em}
-ol.reco-list{list-style:none;counter-reset:reco;padding:0;margin:0 0 8px;background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden;box-shadow:var(--shadow-sm)}
-ol.reco-list li{counter-increment:reco;padding:12px 18px 12px 52px;position:relative;border-bottom:1px solid var(--grid)}
-ol.reco-list li:last-child{border-bottom:none}
-ol.reco-list li::before{content:counter(reco);position:absolute;left:16px;top:11px;width:22px;height:22px;border-radius:50%;background:var(--accent-tint);color:var(--accent);font-size:.72rem;font-weight:700;display:flex;align-items:center;justify-content:center;font-variant-numeric:tabular-nums}
-h4.group{font-size:.9rem;margin:18px 0 8px;color:var(--text)}
-.matrix-group{margin-bottom:18px}
-.matrix-group table{margin-bottom:0}
-tr.none td{background:var(--critical-tint)}
-tr.none td:first-child{font-weight:650}
-.tag-none{display:inline-block;font-size:.68rem;font-weight:700;color:var(--critical);background:var(--critical-tint);border-radius:4px;padding:1px 6px;letter-spacing:.02em}
-footer{margin-top:56px;color:var(--muted);font-size:.8rem;text-align:center}
-@media (prefers-reduced-motion: no-preference){.card,.kpi{animation:rise .4s ease both}}
-@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
-`.trim()
-
-// These are parsed out of repo metadata (branch names, commit hashes, version
-// strings) by the Discover phase — lower risk than upstream changelog prose, but
-// still not something we typed ourselves, so escape before it reaches report_html.
-const operatorBaseSafe = escapeHtml(operatorBase)
-const operatorVersionSafe = escapeHtml(operatorVersion)
-const contribBaseSafe = escapeHtml(contribBase)
-const releaseBranchSafe = escapeHtml(releaseBranch)
-
-const report = await agent(`You are generating the final regression detection report as a single self-contained HTML document.
-
-TASK: Synthesize findings and test coverage into a polished HTML report and a JSON summary.
-
-DOWNSTREAM BASE: operator ${operatorBaseSafe} (v${operatorVersionSafe}), collector ${contribBaseSafe}
+DOWNSTREAM BASE: operator ${operatorBase} (v${operatorVersion}), collector ${contribBase}
 UPSTREAM TARGET: origin/main
-RELEASE BRANCH: ${releaseBranchSafe}
+RELEASE BRANCH: ${releaseBranch}
 COMPONENTS IN BUILD: ${components.length} (discovered from manifest.yaml)
 DOCUMENTED COMPONENTS: ${documentedComponents.length}
 ${docDrift.length > 0 ? `DOCS WITHOUT MATCHING BUILD COMPONENT: ${docDrift.length}` : ''}
@@ -807,7 +845,7 @@ ALL FINDINGS (${allFindings.length} total):
 ${findingsSummary || '(no findings)'}
 
 DETAILED FINDINGS:
-${JSON.stringify(allFindingsSafe, null, 2)}
+${JSON.stringify(allFindings, null, 2)}
 
 ${coverageSummary ? `COMPONENT TEST COVERAGE SUMMARY:
 - Total components: ${coverageSummary.total_components}
@@ -824,45 +862,36 @@ ${featureSummary ? `OPERATOR FEATURE COVERAGE SUMMARY:
 
 INSTRUCTIONS:
 
-1. Deduplicate findings (same issue from multiple methods → keep highest severity, note all methods).
+1. Deduplicate findings (same issue from multiple methods → keep highest severity, merge detection_methods).
 2. Sort by severity: CRITICAL → HIGH → MEDIUM → LOW.
-3. Assign each finding a stable short ID per severity (CRIT-1, CRIT-2, HIGH-1, HIGH-2, MED-1, LOW-1, ...) and reuse those exact IDs when referencing findings in Recommendations, so every recommendation is traceable back to a finding card.
-4. Produce report_html: ONE complete, self-contained HTML document (<!DOCTYPE html> through </html>). No external stylesheets, fonts, CDNs, or <script> tags — it must render fully offline when opened as a local file or downloaded as a CI artifact. The finding text above is already HTML-escaped; insert it as-is. Never emit a <script> tag, an event-handler attribute (onclick=, onerror=, etc.), or a javascript: URL anywhere in the output, regardless of what appears in the input data.
-
-Copy this exact CSS into a single <style> block in <head>, unchanged:
-
-<style>
-${REPORT_CSS}
-</style>
-
-BODY STRUCTURE (use these exact classes so the CSS above applies correctly):
-
-- <header class="hero"> containing a <div class="wrap" style="padding:0"> with: <div class="eyebrow">Red Hat build of OpenTelemetry</div>, an <h1> with a 🔎 emoji and "Regression Detection Report", and a <div class="meta"> of pill <span>s showing the date, downstream base, upstream target, and release branch.
-- <div class="wrap"> wrapping everything below the header, containing:
-  - <nav class="jump"> with anchor links to #critical #high #medium #low #coverage #operator-features #drift #recommendations — only include a link to a section that actually has content below.
-  - <div class="kpis"> — one <div class="kpi crit|high|med|low|cov"> stat tile per severity (a <div class="n"> count and <div class="l"><span class="dot"></span>Label</div>), plus a "Components in build" tile.
-  - <div class="dist"> — a single stacked <div class="track"> bar with one <div class="seg crit|high|med|low" style="width:X%"> per severity sized to its share of total findings, plus a <div class="legend"> listing each with its count.
-  - <h2 class="section" id="critical">🔴 Critical Findings</h2> followed by one <div class="card crit"> per critical finding (same pattern for High/🟠/id="high", Medium/🟡/id="medium", Low/🟢/id="low"). Each card: a <div class="badges"> row with a <span class="badge id"> (the stable ID from step 3), a <span class="badge sev crit|high|med|low">SEVERITY</span>, a category badge, and a component badge; an <h3> title; a one-line <p class="impact">; and a <details><summary>Details</summary>...</details> with introduced-in/reference/full description/affected fields/recommended action. Skip a severity's <h2> and nav link entirely if it has zero findings.
-  - <h2 class="section" id="coverage">🧪 Test Coverage Report</h2> then insert this pre-rendered block verbatim (already correctly empty if there's no data — do not add your own bars):
-${componentBarsBlock || '(no component coverage bars — omit)'}
-    Then insert this pre-rendered callout verbatim (already omitted if there are zero uncovered components — do not add your own):
-${componentCalloutBlock || '(no uncovered components — omit this callout entirely)'}
-    Then insert this pre-rendered collapsible matrix verbatim, in full, with no changes, truncation, or "N more rows" placeholders:
-${componentMatrixBlock || '(no matrix data — omit)'}
-  - <h2 class="section" id="operator-features">🧩 Operator Features</h2> — coverage of operator-level capabilities (target allocator, OpAMP bridge, sidecar injection, autoscaling, etc.), distinct from collector components above. Omit this entire section (and its nav link) if there is no operator feature data. Otherwise insert these pre-rendered blocks verbatim, unchanged, in full:
-${featureBarsBlock || '(no feature bar — omit)'}
-${featureCalloutBlock || '(no uncovered features — omit this callout)'}
-${featureMatrixBlock || '(no feature matrix — omit)'}
-  - <h2 class="section" id="drift">📄 Documentation Drift</h2> — a plain <table> of any doc-only components or stale doc findings. Skip if none.
-  - <h2 class="section" id="recommendations">✅ Recommendations</h2> — group into three <h3 class="subsection"> blocks: "Immediate actions (before release)", "Before next release", "Documentation updates". Under each, an <ol class="reco-list"> of <li> items, each citing the finding ID(s) it addresses (e.g. "<strong>...</strong> (CRIT-1) — ...").
-  - <footer>Generated by otel-regression-detection · Red Hat build of OpenTelemetry</footer>
-
-The pre-rendered blocks above (bars, callouts, matrix tables) are already complete and correct — copy them exactly as given, with no paraphrasing, shortening, or "... N more rows ..." placeholders. Every finding must get its own card; never summarize multiple findings into one card or drop any to save space.
-
-5. Return report_html (the full HTML document as a string) and summary_counts.`, {
+3. Assign each finding a stable short ID per severity (CRIT-1, CRIT-2, HIGH-1, HIGH-2, MED-1, LOW-1, ...).
+4. Return findings_rendered (the flat deduplicated array with IDs from step 3) and summary_counts (counts per severity + total).`, {
   label: 'report-generator',
   phase: 'Synthesize',
   schema: REPORT_SCHEMA,
 })
 
-return report
+if (!report || !report.findings_rendered || !report.summary_counts) {
+  log('ERROR: Synthesize phase failed — report-generator agent returned no usable result. Aborting.')
+  return {
+    report_markdown: '# Regression Detection — Failed\n\nSynthesize phase failed. The report-generator agent did not return usable structured output.',
+    summary_counts: { critical: 0, high: 0, medium: 0, low: 0, total: 0 },
+  }
+}
+
+const reportMarkdown = buildRemediationMarkdown(report.findings_rendered, {
+  operatorBase,
+  operatorVersion,
+  upstreamOperatorVersion,
+  contribBase,
+  releaseBranch,
+  componentsCount: components.length,
+  documentedCount: documentedComponents.length,
+  summaryCounts: report.summary_counts,
+  coverageMatrix,
+  operatorFeatureMatrix,
+  docDrift,
+  deviations: allDeviations,
+})
+
+return { report_markdown: reportMarkdown, summary_counts: report.summary_counts, operator_version: upstreamOperatorVersion }

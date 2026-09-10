@@ -32,7 +32,7 @@ The workflow has 4 phases:
    - **Test Coverage Matrix** — builds a full per-component coverage report (dedicated/implicit/none for both upstream and QE tests) plus a separate operator feature coverage matrix (target allocator, OpAMP bridge, sidecar injection, autoscaling, etc., discovered from the operator's `tests/e2e-*` suites), highlights gaps, detects upstream test deletions
    - **Dependency Tracking** — flags significant version bumps in go.mod
 
-4. **Synthesize** — deduplicates, classifies severity, generates a self-contained HTML report and JSON summary
+4. **Synthesize** — deduplicates, classifies severity, generates a Markdown remediation report and JSON summary
 
 ## Prerequisites
 
@@ -51,10 +51,10 @@ The `gh` CLI must be authenticated for GitHub issue/PR scanning.
 
 ### Before running locally
 
-The CI job checks weekly for new upstream operator releases and runs automatically when one is detected. Reports are uploaded as GitHub Actions artifacts. Before running locally (which consumes significant tokens), check if a recent report already exists:
+The CI job runs automatically roughly every six weeks (1st of Jan/Apr/Jul/Oct, 15th of Feb/May/Aug/Nov, all at 07:57 UTC), regardless of whether the upstream operator version has changed since the last run. It commits its reports straight to `reports/` on `main` (also uploaded as a GitHub Actions artifact for the specific run). Before running locally (which consumes significant tokens), check if a recent report already exists:
 
-1. Go to the [Regression Detection](https://github.com/rhobs/redhat-build-of-opentelemetry-workspace/actions/workflows/regression-detection.yml) workflow in GitHub Actions
-2. Download the artifact if the results are sufficient
+1. Check `reports/` on `main` for a report dated within the last six weeks — `git pull` if your local checkout is behind.
+2. If nothing recent enough is there yet, check the [Regression Detection](https://github.com/rhobs/redhat-build-of-opentelemetry-workspace/actions/workflows/regression-detection.yml) workflow in GitHub Actions in case a run is in flight.
 
 Run locally only if you need fresher results or want to focus on a specific detection method.
 
@@ -90,9 +90,26 @@ This uses the `v3.10` tag in `konflux-opentelemetry` to read the exact component
 
 1. **Verify repos are cloned**: Check that required repos exist in the workspace directory (cloned via `make clone-repos`). If any are missing, tell the user to run `make clone-repos`.
 
-2. **Run the regression detection workflow**: Invoke the Workflow tool with `.claude/workflows/regression-detection.js`, passing repo paths and method as args. The workflow's Discover phase automatically extracts all build metadata from `konflux-opentelemetry`.
+2. **Run the regression detection workflow**: Invoke the Workflow tool with `.claude/workflows/regression-detection.js`, passing repo paths and method as args:
+   ```js
+   Workflow({
+     name: 'regression-detection',
+     args: {
+       konflux_path: 'konflux-opentelemetry',
+       operator_path: 'opentelemetry-operator',
+       contrib_path: 'opentelemetry-collector-contrib',
+       core_path: 'opentelemetry-collector',
+       rh_collector_path: 'redhat-opentelemetry-collector',
+       docs_path: 'openshift-docs',       // optional — omit or '' if not cloned
+       qe_path: 'distributed-tracing-qe', // optional — omit or '' if not cloned
+       method: 'all',                     // or one of the --method values above
+       release_version: '',               // or e.g. '3.10' for --release-version
+     },
+   })
+   ```
+   All path args default to these same repo names if omitted, so the workflow also runs standalone via the auto-registered `/regression-detection` command. The workflow's Discover phase automatically extracts all build metadata from `konflux-opentelemetry`, and its Setup phase validates the required repos/base refs before proceeding.
 
-3. **Generate report**: Write to `reports/regression-report-YYYY-MM-DD.html` and `reports/regression-summary-YYYY-MM-DD.json`.
+3. **Generate report**: The workflow's return value includes `operator_version` (the *upstream* operator version this report analyzes — the latest release tag reachable from origin/main in the operator repo, e.g. `v0.160.0`, not the downstream base version) alongside `report_markdown` and `summary_counts`. Write to `reports/regression-summary-v<operator_version>-YYYY-MM-DD.json` and `reports/regression-detection-v<operator_version>-YYYY-MM-DD.md` (the `report_markdown` field — a plain-Markdown rendering of the findings, grouped by severity (Critical/High/Medium/Low) with a Contents section linking straight to each, and each finding's metadata rendered as a table). Every report ends with a **Skill Improvement Recommendations** section: every sub-agent in the workflow self-reports any place its actual approach deviated from that agent's prompt as written, and these are collected into that section (`None.` if nothing deviated) — a running signal for improving this skill's own instructions over time. There is no HTML report — Markdown is the only report format.
 
 4. **Present summary**: Show counts by severity and top findings.
 
@@ -114,4 +131,4 @@ claude -p "/otel-regression-detection --method changelog" \
 
 `--dangerously-skip-permissions` is required for headless runs — there's no terminal to approve tool-use prompts. This is safe in CI because `--allowedTools` still restricts which tools can run, and the CI runner is an ephemeral, isolated environment.
 
-See `.github/workflows/regression-detection.yml` for the full CI setup (weekly release check, repo cloning, credentials).
+See `.github/workflows/regression-detection.yml` for the full CI setup (six-week schedule, repo cloning, credentials).
