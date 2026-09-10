@@ -38,6 +38,7 @@ The distro includes 15 receivers in source. Support levels per documentation:
 | Journald | **TP** | |
 | Kubernetes Cluster | **TP** | |
 | Webhook Event | **TP** | Added in 3.11.0. Beta upstream for logs. |
+| OBI | **TP** | Added in 3.11.0. eBPF-based zero-code instrumentation. See `what/obi.md`. |
 
 ### Exporters
 
