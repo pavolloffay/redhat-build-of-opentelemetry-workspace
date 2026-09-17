@@ -32,6 +32,7 @@ AI agents. Content is optimized for precision and machine consumption.
 | Understand productization | `what/productization.md` |
 | Understand non-repudiation signing | `what/signing.md` |
 | Understand RHEL metering | `what/rhel-metering.md` |
+| Understand 3.12 new components | `what/collector-3.12-components.md` |
 | Find which repo to edit | `how/repo-map.md` |
 | Understand repo layout | `how/project-structure.md` |
 | Understand the build pipeline | `how/build-pipeline.md` |

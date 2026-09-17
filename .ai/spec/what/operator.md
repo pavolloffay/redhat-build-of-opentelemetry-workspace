@@ -73,6 +73,12 @@ All four collector modes are **GA**:
 | spec.ingress | Object | — | Ingress configuration | **GA** |
 | spec.configVersions | int | 3 | Number of config versions to retain | **GA** |
 
+## Planned Changes
+
+| Ticket | Summary |
+|---|---|
+| [PLANNED: needs ticket] | Register `webhook_event` receiver parser in `internal/components/receivers/helpers.go` with default port 8088 and alias `webhookeventreceiver`. Enables automatic Service port creation. See `what/collector-3.12-components.md`. |
+
 ## Constraints
 
 1. The operator depends on `openshift/api` for OpenShift-specific integrations.

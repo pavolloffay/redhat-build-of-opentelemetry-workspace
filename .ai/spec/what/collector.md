@@ -141,6 +141,14 @@ The distro includes 10 extensions in source. Support levels per documentation:
 | Component | Type | Support Level | Ticket |
 |---|---|---|---|
 | Signature Validation | Processor | **[PLANNED: TRACING-6499]** TP | Validates non-repudiation signatures on incoming spans. See `what/signing.md`. |
+| Log Deduplication | Processor | **[PLANNED: TRACING-6697]** TP | Aggregates identical logs over a time interval. See `what/collector-3.12-components.md`. |
+| Syslog | Exporter | **[PLANNED: TRACING-6788]** TP | Exports logs via syslog protocol (RFC 5424/3164). See `what/collector-3.12-components.md`. |
+
+### Excluded Components (Evaluated and Rejected)
+
+| Component | Type | Reason | Ticket |
+|---|---|---|---|
+| Logs Transform | Processor | Upstream stability `development` (lowest tier). Explicitly slated for deprecation (#19775). Not in any upstream distribution. Use the Transform Processor (GA) + OTTL instead. | TRACING-6698 (cancelled) |
 
 ## Constraints
 
