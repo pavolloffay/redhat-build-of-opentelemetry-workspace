@@ -18,15 +18,15 @@ Use this skill when:
 
 ### Clone and Checkout Product Branch
 
-`os-observability/opentelemetry-operator` (the product/downstream fork) shares its basename with the upstream `open-telemetry/opentelemetry-operator` repo also tracked in this workspace — clone it into `midstream-opentelemetry-operator` to avoid colliding with the upstream directory (matches the workspace `Makefile`'s `clone-repos` convention):
+`openshift/open-telemetry-opentelemetry-operator` (the product/downstream fork):
 
 ```bash
-git clone git@github.com:os-observability/opentelemetry-operator.git midstream-opentelemetry-operator
-cd midstream-opentelemetry-operator
+git clone git@github.com:openshift/open-telemetry-opentelemetry-operator.git
+cd open-telemetry-opentelemetry-operator
 git checkout rhosdt-3.10
 ```
 
-If the repo is already present (check for a directory named `opentelemetry-operator` or `midstream-opentelemetry-operator` with `origin` pointing at `os-observability/opentelemetry-operator`), `cd` into that directory and sync with the product branch. This clone is disposable test-fixture scratch space, not a place for uncommitted work — confirm that with the user before running `git clean -fd`, since it deletes untracked files:
+If the repo is already present (check for a directory named `open-telemetry-opentelemetry-operator` with `origin` pointing at `openshift/open-telemetry-opentelemetry-operator`), `cd` into that directory and sync with the product branch. This clone is disposable test-fixture scratch space, not a place for uncommitted work — confirm that with the user before running `git clean -fd`, since it deletes untracked files:
 
 ```bash
 cd <the-detected-directory>

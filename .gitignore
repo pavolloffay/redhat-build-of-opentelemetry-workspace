@@ -13,6 +13,8 @@ multicluster-observability-addon/
 distributed-tracing-qe/
 release/
 konflux/
+ocp-build-data/
+open-telemetry-opentelemetry-operator/
 
 # Regression detection — reports are committed; only the CI bookkeeping marker is ignored
 reports/.last-reported-version

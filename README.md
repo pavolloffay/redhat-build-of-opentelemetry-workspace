@@ -10,7 +10,8 @@ Cross-repo workspace for Red Hat build of OpenTelemetry — shared specs, routin
 | [opentelemetry-collector-contrib](https://github.com/open-telemetry/opentelemetry-collector-contrib) | Collector contrib with all components                                 |
 | [redhat-opentelemetry-collector](https://github.com/os-observability/redhat-opentelemetry-collector) | Red Hat distribution of the collector                                 |
 | [opentelemetry-operator](https://github.com/open-telemetry/opentelemetry-operator)                   | Kubernetes operator                                                   |
-| [midstream-opentelemetry-operator](https://github.com/os-observability/opentelemetry-operator)       | Product/downstream fork of the operator, holds `rhosdt-x.y` branches used for QE product testing |
+| [open-telemetry-opentelemetry-operator](https://github.com/openshift/open-telemetry-opentelemetry-operator) | Product/downstream fork of the operator, holds `rhosdt-x.y` branches used for QE product testing |
+| [ocp-build-data](https://github.com/openshift-eng/ocp-build-data) | ART configuration for product builds, uses `rhosdt-x.y` branches |
 | [konflux-opentelemetry](https://github.com/os-observability/konflux-opentelemetry)                   | Downstream productization repository, contains all product components |
 | [konflux](https://gitlab.cee.redhat.com/distributed-tracing/konflux)                                  | Konflux release documentation and release payloads                    |
 | [openshift-docs](https://github.com/openshift/openshift-docs/tree/standalone-otel-docs-main)         | Documentation for the Red Hat build of OpenTelemetry                  |

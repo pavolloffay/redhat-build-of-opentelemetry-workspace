@@ -30,6 +30,11 @@ The downstream repositories contain downstream modifications and are built from 
 | ART build history | https://art-build-history-art-build-history.apps.artc2023.pc3z.p1.openshiftapps.com/?group=rhosdt-3.11&assembly=stream&outcome=Success&outcome=Failure&outcome=Pending&engine=konflux&hermetic=both&buildtype=image&buildtype=bundle&buildtype=fbc |
 | Browse images (Quay) | https://quay.io/repository/redhat-user-workloads/ocp-art-tenant/art-fbc?tab=tags (filter `rhosdt`) |
 
+Following script can be used to list all images:
+```bash
+page=1; while true; do result=$(curl -s "https://quay.io/api/v1/repository/redhat-user-workloads/ocp-art-tenant/art-fbc/tag/?filter_tag_name=like:rhosdt&limit=100&page=$page"); echo "$result" | python3 -c "import sys,json; [print(t['name']) for t in json.load(sys.stdin).get('tags',[])]"; has_more=$(echo "$result" | python3 -c "import sys,json; print(json.load(sys.stdin).get('has_additional',False))"); [ "$has_more" = "False" ] && break; page=$((page+1)); done
+```
+
 ## Configuration
 
 | Config | URL | Notes |
@@ -44,6 +49,10 @@ The downstream repositories contain downstream modifications and are built from 
 | openshift-priv whitelist | https://github.com/openshift/release/blob/main/core-services/openshift-priv/_whitelist.yaml | Repositories for embargoed CVEs |
 | Product pages / lifecycle | https://redhat.atlassian.net/servicedesk/customer/portal/238 | Service desk to request updates |
 | Prodsec product definitions | https://gitlab.cee.redhat.com/prodsec/product-definitions/-/tree/master?ref_type=heads | Sources data from product and lifecycle pages |
+
+Advisories:
+* [Konflux stage advisories](https://gitlab.cee.redhat.com/rhtap-release/advisories/-/tree/main/data/advisories/rhosdt-tenant)
+* [Konflux prod advisories](https://gitlab.cee.redhat.com/releng/advisories/-/blob/main/data/advisories/rhosdt-tenant)
 
 ## Documentation
 
@@ -64,8 +73,6 @@ The downstream repositories contain downstream modifications and are built from 
 | Release (#forum-konflux-release) | https://redhat.enterprise.slack.com/archives/C031USXS2FJ |
 | Enterprise contract (#forum-konflux-contract) | https://redhat.enterprise.slack.com/archives/C031J4KBFME |
 | File based catalog (#forum-fbc-support) | https://redhat.enterprise.slack.com/archives/C074JM28DTP |
-| Security architect | Judy Kelly (jkelly@redhat.com) |
-| Release manager | Ben Hills |
 
 ## Tooling & Repositories
 

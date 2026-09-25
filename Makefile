@@ -4,7 +4,7 @@ REPOS = \
 	open-telemetry/opentelemetry-collector \
 	open-telemetry/opentelemetry-collector-contrib \
 	open-telemetry/opentelemetry-operator \
-	os-observability/opentelemetry-operator \
+	openshift/open-telemetry-opentelemetry-operator \
 	os-observability/redhat-opentelemetry-collector \
 	os-observability/konflux-opentelemetry \
 	openshift/openshift-docs \
@@ -12,29 +12,24 @@ REPOS = \
 	openshift/logging-view-plugin \
 	openshift/distributed-tracing-qe \
 	openshift/release \
-	stolostron/multicluster-observability-addon
+	stolostron/multicluster-observability-addon \
+	openshift-eng/ocp-build-data
 
 GITLAB_REPOS = \
 	git@gitlab.cee.redhat.com:distributed-tracing/konflux.git
 
-# os-observability/opentelemetry-operator (the midstream/product fork) shares its
-# basename with open-telemetry/opentelemetry-operator (upstream), so it's cloned
-# into a distinctly named directory to avoid a collision.
-REPO_DIRS = $(foreach r,$(filter-out os-observability/opentelemetry-operator,$(REPOS)),$(notdir $(r))) midstream-opentelemetry-operator $(foreach r,$(GITLAB_REPOS),$(basename $(notdir $(r))))
+REPO_DIRS = $(foreach r,$(REPOS),$(notdir $(r))) $(foreach r,$(GITLAB_REPOS),$(basename $(notdir $(r))))
 
 SKILLSAW_IMAGE := ghcr.io/stbenjam/skillsaw:latest
 
 # Clone all workspace repos into this directory
 # konflux-opentelemetry: --recurse-submodules to populate operator and collector submodules
 # openshift-docs: --single-branch --branch to clone the standalone otel docs branch
-# os-observability/opentelemetry-operator: cloned as midstream-opentelemetry-operator to
-#   avoid colliding with the upstream open-telemetry/opentelemetry-operator directory
 # GitLab repos: require VPN connection to Red Hat network
 clone-repos:
 	@for repo in $(REPOS); do \
 	  name=$$(basename $$repo); \
 	  dir=$$name; \
-	  if [ "$$repo" = "os-observability/opentelemetry-operator" ]; then dir="midstream-opentelemetry-operator"; fi; \
 	  if [ -d "$$dir/.git" ]; then \
 	    echo "=== $$dir already cloned ==="; \
 	  else \
