@@ -13,6 +13,7 @@ multicluster-observability-addon/
 distributed-tracing-qe/
 release/
 konflux/
+konflux-release-data/
 ocp-build-data/
 open-telemetry-opentelemetry-operator/
 

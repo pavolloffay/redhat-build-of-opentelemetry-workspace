@@ -51,8 +51,8 @@ page=1; while true; do result=$(curl -s "https://quay.io/api/v1/repository/redha
 | Prodsec product definitions | https://gitlab.cee.redhat.com/prodsec/product-definitions/-/tree/master?ref_type=heads | Sources data from product and lifecycle pages |
 
 Advisories:
-* [Konflux stage advisories](https://gitlab.cee.redhat.com/rhtap-release/advisories/-/tree/main/data/advisories/rhosdt-tenant)
-* [Konflux prod advisories](https://gitlab.cee.redhat.com/releng/advisories/-/blob/main/data/advisories/rhosdt-tenant)
+* [Konflux stage advisories](https://gitlab.cee.redhat.com/rhtap-release/advisories/-/tree/main/data/advisories/art-rhosdt-tenant)
+* [Konflux prod advisories](https://gitlab.cee.redhat.com/releng/advisories/-/blob/main/data/advisories/art-rhosdt-tenant)
 
 ## Documentation
 

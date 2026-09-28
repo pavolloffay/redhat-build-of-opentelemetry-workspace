@@ -1,0 +1,14 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: CatalogSource
+metadata:
+  name: art-otel
+  namespace: openshift-marketplace
+spec:
+  sourceType: grpc
+  image: quay.io/redhat-user-workloads/ocp-art-tenant/art-fbc:opentelemetry-rhel9-operator-fbc-0.158.1-20260928044431.ocp4.22
+  publisher: art
+  updateStrategy:
+    registryPoll:
+      interval: 10m0s
+
+# docker pull quay.io/redhat-user-workloads/ocp-art-tenant/art-fbc:rhosdt-3.11__v4.22__opentelemetry-rhel9-operator__gc4558c8

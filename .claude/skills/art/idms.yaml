@@ -1,0 +1,9 @@
+apiVersion: config.openshift.io/v1
+kind: ImageDigestMirrorSet
+metadata:
+  name: otel-art-stage
+spec:
+  imageDigestMirrors:
+    - source: registry.redhat.io/rhosdt
+      mirrors:
+        - registry.stage.redhat.io/rhosdt
