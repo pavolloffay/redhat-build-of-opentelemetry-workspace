@@ -85,3 +85,14 @@ Advisories:
 | Konflux release pipeline | https://github.com/konflux-ci/release-service-catalog | |
 | Prefetch dependencies (cachi2) | https://github.com/containerbuildsystem/cachi2 | |
 | Renovate / MintMaker config | https://github.com/konflux-ci/mintmaker/blob/main/config/renovate/renovate.json | Docs: https://docs.renovatebot.com/ |
+
+## Release Process
+
+See [RELEASE.md](RELEASE.md) for the release process, including stage/prod promotion and version update steps.
+
+## Test builds
+
+Once the FBC builds are ready (e.g. `quay.io/redhat-user-workloads/ocp-art-tenant/art-fbc`) the operator can be deployed and tested.
+
+Use [catalog-source.yaml](catalog-source.yaml) to create a CatalogSource for testing stage builds, and [idms.yaml](idms.yaml) to load images from the stage registry.
+
