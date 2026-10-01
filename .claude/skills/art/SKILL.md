@@ -26,7 +26,8 @@ The downstream repositories contain downstream modifications and are built from 
 | Dashboard | URL |
 |-----------|-----|
 | Konflux UI | https://konflux-ui.apps.kflux-ocp-p01.7ayg.p1.openshiftapps.com/ns/art-rhosdt-tenant/applications |
-| OpenShift UI (pipeline runs) | https://console-openshift-console.apps.kflux-ocp-p01.7ayg.p1.openshiftapps.com/pipelines/ns/art-rhosdt-tenant/pipeline-runs |
+| OpenShift UI (Konflux components) | https://console-openshift-console.apps.kflux-ocp-p01.7ayg.p1.openshiftapps.com/pipelines/ns/art-rhosdt-tenant/pipeline-runs |
+| OpenShift UI (ART run release pipeline) | https://console-openshift-console.apps.artc2023.pc3z.p1.openshiftapps.com/pipelines/ns/art-rhosdt-tenant/ |
 | ART build history | https://art-build-history-art-build-history.apps.artc2023.pc3z.p1.openshiftapps.com/?group=rhosdt-3.11&assembly=stream&outcome=Success&outcome=Failure&outcome=Pending&engine=konflux&hermetic=both&buildtype=image&buildtype=bundle&buildtype=fbc |
 | Browse images (Quay) | https://quay.io/repository/redhat-user-workloads/ocp-art-tenant/art-fbc?tab=tags (filter `rhosdt`) |
 
