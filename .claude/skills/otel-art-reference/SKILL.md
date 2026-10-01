@@ -1,10 +1,12 @@
 ---
-name: art
+name: otel-art-reference
 description: >
-  Reference skill for the ART (Automated Release Tool) build and productization
-  process for Red Hat build of OpenTelemetry. Use when the user asks about ART
-  builds, Konflux pipelines, release configuration, image locations, or needs
-  help navigating the ART/Konflux ecosystem.
+  Reference skill for ART (Automated Release Tool) build and productization of
+  Red Hat build of OpenTelemetry. Use when the user asks about ART builds, ART
+  Konflux tenant configuration, image locations in ART pipelines, or release
+  promotion. Not for the legacy os-observability Konflux flow — see
+  otel-qe-deploy-stage-build, otel-qe-prepare-konflux-tests, and
+  otel-qe-ocp-ci-tests for those.
 argument-hint: "[question about ART/Konflux builds or configuration]"
 ---
 
@@ -14,7 +16,7 @@ Answer questions about the ART build and productization process for Red Hat buil
 
 ## Downstream Repositories
 
-The downstream repositories contain downstream modifications and are built from branches e.g. `rhosdt-3.11`.
+The downstream repositories contain downstream modifications and are built from `rhosdt-<version>` branches (e.g. `rhosdt-3.11`).
 
 | Repository | URL |
 |------------|-----|
@@ -45,7 +47,7 @@ page=1; while true; do result=$(curl -s "https://quay.io/api/v1/repository/redha
 | RPA Constraint | https://gitlab.cee.redhat.com/releng/konflux-release-data/-/blob/main/constraints/product/art-rhosdt.yaml?ref_type=heads | |
 | Enterprise Contract | https://gitlab.cee.redhat.com/releng/konflux-release-data/-/tree/main/config/kflux-ocp-p01.7ayg.p1/product/EnterpriseContractPolicy?ref_type=heads | |
 | Prodsec / CPE | https://gitlab.cee.redhat.com/releng/konflux-release-data/-/blob/main/prodsec/art-rhosdt.yaml?ref_type=heads | |
-| ocp-build-data | https://github.com/openshift-eng/ocp-build-data/tree/rhosdt-3.11 | `main` branch has config examples. PRs must be approved by ART team. |
+| ocp-build-data | https://github.com/openshift-eng/ocp-build-data | `main` has config examples only. Product config is on `rhosdt-<version>` branches — checkout the target version after cloning. PRs must be approved by ART team. |
 | ART product maps | https://github.com/openshift-eng/art-tools/blob/main/artcommon/artcommonlib/constants.py | |
 | openshift-priv whitelist | https://github.com/openshift/release/blob/main/core-services/openshift-priv/_whitelist.yaml | Repositories for embargoed CVEs |
 | Product pages / lifecycle | https://redhat.atlassian.net/servicedesk/customer/portal/238 | Service desk to request updates |
@@ -68,7 +70,7 @@ Advisories:
 
 | Channel | Contact |
 |---------|---------|
-| @chai-bot (can submit config PRs and answer questions) | https://redhat.enterprise.slack.com/archives/D0BEVMQ11DH |
+| chai-bot — DM this Slack bot to submit config PRs and ask questions | `@chai-bot` in Slack |
 | ART questions (#forum-ocp-art) | https://redhat.enterprise.slack.com/archives/CB95J6R4N |
 | Konflux general (#konflux-users) | https://redhat.enterprise.slack.com/archives/C04PZ7H0VA8 |
 | Release (#forum-konflux-release) | https://redhat.enterprise.slack.com/archives/C031USXS2FJ |
@@ -88,11 +90,14 @@ Advisories:
 
 ## Release Process
 
-See [RELEASE.md](RELEASE.md) for the release process, including stage/prod promotion and version update steps.
+See [RELEASE.md](RELEASE.md) for the release process (draft — will be completed after the first ART release), including stage/prod promotion and version update steps.
 
 ## Test builds
 
 Once the FBC builds are ready (e.g. `quay.io/redhat-user-workloads/ocp-art-tenant/art-fbc`) the operator can be deployed and tested.
 
-Use [catalog-source.yaml](catalog-source.yaml) to create a CatalogSource for testing stage builds, and [idms.yaml](idms.yaml) to load images from the stage registry.
+Use [catalog-source.yaml](catalog-source.yaml) as a template for creating a CatalogSource — replace the `image` field with the actual FBC image tag from the Quay repository above (e.g. `quay.io/redhat-user-workloads/ocp-art-tenant/art-fbc:<tag>`). The `otel-qe-deploy-stage-build` skill's `install-operators/otel.yaml` has a more complete example that also includes the Project, OperatorGroup, and Subscription.
 
+Use [idms.yaml](idms.yaml) to mirror images from the production registry to the stage registry. Note:
+- This IDMS maps the entire `registry.redhat.io/rhosdt` prefix to `registry.stage.redhat.io/rhosdt`. If the cluster also has the more specific per-image IDMS from `otel-qe-deploy-stage-build` (which maps to `quay.io/redhat-user-workloads/...`), the more specific entries take precedence — remove one or the other to avoid confusion about which build is under test.
+- `registry.stage.redhat.io` requires authentication. Add stage credentials to the cluster's global pull secret before applying this IDMS.

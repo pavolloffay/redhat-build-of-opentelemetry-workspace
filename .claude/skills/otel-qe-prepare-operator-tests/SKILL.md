@@ -18,27 +18,39 @@ Use this skill when:
 
 ### Clone and Checkout Product Branch
 
-`openshift/open-telemetry-opentelemetry-operator` (the product/downstream fork):
+Ask the user for the release version (e.g. `3.11`) if not provided as an argument. Use `rhosdt-<version>` as the branch name throughout.
+
+Two downstream forks exist:
+- `openshift/open-telemetry-opentelemetry-operator` — the ART-era fork, has `rhosdt-3.11` and later
+- `os-observability/opentelemetry-operator` — the legacy Konflux fork, has `rhosdt-3.7` through `rhosdt-3.11`
+
+For `rhosdt-3.11+`, use the `openshift` fork. For older versions, use the `os-observability` fork.
 
 ```bash
+# For rhosdt-3.11+:
 git clone git@github.com:openshift/open-telemetry-opentelemetry-operator.git
 cd open-telemetry-opentelemetry-operator
-git checkout rhosdt-3.10
+git checkout rhosdt-<version>
+
+# For rhosdt-3.10 and earlier:
+git clone git@github.com:os-observability/opentelemetry-operator.git os-observability-opentelemetry-operator
+cd os-observability-opentelemetry-operator
+git checkout rhosdt-<version>
 ```
 
-If the repo is already present (check for a directory named `open-telemetry-opentelemetry-operator` with `origin` pointing at `openshift/open-telemetry-opentelemetry-operator`), `cd` into that directory and sync with the product branch. This clone is disposable test-fixture scratch space, not a place for uncommitted work — confirm that with the user before running `git clean -fd`, since it deletes untracked files:
+If the repo is already present (check for a directory named `open-telemetry-opentelemetry-operator` or `os-observability-opentelemetry-operator` with `origin` pointing at the appropriate fork), `cd` into that directory and sync with the product branch. This clone is disposable test-fixture scratch space, not a place for uncommitted work — confirm that with the user before running `git clean -fd`, since it deletes untracked files:
 
 ```bash
 cd <the-detected-directory>
 git restore .
 git clean -fd
-git checkout rhosdt-3.10
-git pull --rebase origin rhosdt-3.10
+git checkout rhosdt-<version>
+git pull --rebase origin rhosdt-<version>
 ```
 
 ## Product Branch Modifications
 
-The `rhosdt-3.10` branch must contain the following modifications for product testing:
+The `rhosdt-<version>` branch must contain the following modifications for product testing:
 
 ### Additional e2e-otel Component Tests
 
