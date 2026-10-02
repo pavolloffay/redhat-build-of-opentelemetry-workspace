@@ -33,10 +33,6 @@ The downstream repositories contain downstream modifications and are built from 
 | ART build history | https://art-build-history-art-build-history.apps.artc2023.pc3z.p1.openshiftapps.com/?group=rhosdt-3.11&assembly=stream&outcome=Success&outcome=Failure&outcome=Pending&engine=konflux&hermetic=both&buildtype=image&buildtype=bundle&buildtype=fbc |
 | Browse images (Quay) | https://quay.io/repository/redhat-user-workloads/ocp-art-tenant/art-fbc?tab=tags (filter `rhosdt`) |
 
-Following script can be used to list all images:
-```bash
-page=1; while true; do result=$(curl -s "https://quay.io/api/v1/repository/redhat-user-workloads/ocp-art-tenant/art-fbc/tag/?filter_tag_name=like:rhosdt&limit=100&page=$page"); echo "$result" | python3 -c "import sys,json; [print(t['name']) for t in json.load(sys.stdin).get('tags',[])]"; has_more=$(echo "$result" | python3 -c "import sys,json; print(json.load(sys.stdin).get('has_additional',False))"); [ "$has_more" = "False" ] && break; page=$((page+1)); done
-```
 
 ## Configuration
 
@@ -88,16 +84,24 @@ Advisories:
 | Prefetch dependencies (cachi2) | https://github.com/containerbuildsystem/cachi2 | |
 | Renovate / MintMaker config | https://github.com/konflux-ci/mintmaker/blob/main/config/renovate/renovate.json | Docs: https://docs.renovatebot.com/ |
 
+## FBC images
+
+Use [get-fbc-images.sh](get-fbc-images.sh) to list the latest FBC image for each supported OCP version. The floating tag `rhosdt-<ver>__v<ocp>__opentelemetry-rhel9-operator` always points to the latest build; tags with a `__g<hash>` suffix are pinned to a specific git commit.
+```bash
+./get-fbc-images.sh 3.11
+```
+
 ## Release Process
 
 See [RELEASE.md](RELEASE.md) for the release process (draft — will be completed after the first ART release), including stage/prod promotion and version update steps.
 
 ## Test builds
 
-Once the FBC builds are ready (e.g. `quay.io/redhat-user-workloads/ocp-art-tenant/art-fbc`) the operator can be deployed and tested.
+### Deploy ART FBC builds on a cluster
 
-Use [catalog-source.yaml](catalog-source.yaml) as a template for creating a CatalogSource — replace the `image` field with the actual FBC image tag from the Quay repository above (e.g. `quay.io/redhat-user-workloads/ocp-art-tenant/art-fbc:<tag>`). The `otel-qe-deploy-stage-build` skill's `install-operators/otel.yaml` has a more complete example that also includes the Project, OperatorGroup, and Subscription.
-
-Use [idms.yaml](idms.yaml) to mirror images from the production registry to the stage registry. Note:
-- This IDMS maps the entire `registry.redhat.io/rhosdt` prefix to `registry.stage.redhat.io/rhosdt`. If the cluster also has the more specific per-image IDMS from `otel-qe-deploy-stage-build` (which maps to `quay.io/redhat-user-workloads/...`), the more specific entries take precedence — remove one or the other to avoid confusion about which build is under test.
-- `registry.stage.redhat.io` requires authentication. Add stage credentials to the cluster's global pull secret before applying this IDMS.
+1. **Add stage registry credentials** (required for `registry.stage.redhat.io`; token is a base64 `user:password` from the team's credential store):
+   ```bash
+   ./setup-stage-credentials.sh <stage-registry-auth-token>
+   ```
+1. **Apply the IDMS** — [idms.yaml](idms.yaml) mirrors `registry.redhat.io/rhosdt` to `registry.stage.redhat.io/rhosdt`. Remove any per-image IDMS from `otel-qe-deploy-stage-build` to avoid conflicts.
+1. **Create the CatalogSource** — use [catalog-source.yaml](catalog-source.yaml) as a template, replacing the `image` field with the FBC image from step 1. See `otel-qe-deploy-stage-build`'s `install-operators/otel.yaml` for a full example with Project, OperatorGroup, and Subscription.
