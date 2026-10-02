@@ -51,6 +51,7 @@ page=1; while true; do result=$(curl -s "https://quay.io/api/v1/repository/redha
 | ART product maps | https://github.com/openshift-eng/art-tools/blob/main/artcommon/artcommonlib/constants.py | |
 | openshift-priv whitelist | https://github.com/openshift/release/blob/main/core-services/openshift-priv/_whitelist.yaml | Repositories for embargoed CVEs |
 | Product pages / lifecycle | https://redhat.atlassian.net/servicedesk/customer/portal/238 | Service desk to request updates |
+| Configure Github apps/repositories | https://devservices.dpp.openshift.com/support/general_request/?template=general_github_ticket | Enable [Konflux app](https://github.com/apps/konflux-kflux-ocp-p01), ask in [#forum-pge-cloud-ops](https://redhat.enterprise.slack.com/archives/CBUT43E94)  |
 | Prodsec product definitions | https://gitlab.cee.redhat.com/prodsec/product-definitions/-/tree/master?ref_type=heads | Sources data from product and lifecycle pages |
 
 Advisories:
