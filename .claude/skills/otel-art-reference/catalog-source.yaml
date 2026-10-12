@@ -5,7 +5,8 @@ metadata:
   namespace: openshift-marketplace
 spec:
   sourceType: grpc
-  image: <REPLACE with quay.io/redhat-user-workloads/ocp-art-tenant/art-fbc:TAG>
+#  image: <REPLACE with quay.io/redhat-user-workloads/ocp-art-tenant/art-fbc:TAG>
+  image: quay.io/redhat-user-workloads/ocp-art-tenant/art-fbc@sha256:6d3d0aa4d337b23b7baa52ef76983915581bb5bacb623fa0df033c036429e5f0
   publisher: art
   updateStrategy:
     registryPoll:

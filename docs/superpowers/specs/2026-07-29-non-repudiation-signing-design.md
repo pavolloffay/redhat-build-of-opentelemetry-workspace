@@ -51,7 +51,7 @@ The `SigningProcessor` is the customer-facing abstraction. The exporter wrapper 
 ### Usage
 
 ```go
-import "github.com/os-observability/redhat-opentelemetry-collector/pkg/signing"
+import "github.com/openshift/redhat-opentelemetry-collector/pkg/signing"
 
 signer, err := signing.NewHMACSigner(signing.HMACConfig{
     KeyPath: "/etc/otel/keys/hmac.key",

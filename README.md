@@ -8,11 +8,11 @@ Cross-repo workspace for Red Hat build of OpenTelemetry — shared specs, routin
 |------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------|
 | [opentelemetry-collector](https://github.com/open-telemetry/opentelemetry-collector)                 | Core collector                                                        |
 | [opentelemetry-collector-contrib](https://github.com/open-telemetry/opentelemetry-collector-contrib) | Collector contrib with all components                                 |
-| [redhat-opentelemetry-collector](https://github.com/openshift/redhat-opentelemetry-collector) | Red Hat distribution of the collector                                 |
+| [redhat-opentelemetry-collector](https://github.com/openshift/redhat-opentelemetry-collector) | Red Hat distribution of the collector. Downstream productization repository  |
 | [opentelemetry-operator](https://github.com/open-telemetry/opentelemetry-operator)                   | Kubernetes operator                                                   |
-| [open-telemetry-opentelemetry-operator](https://github.com/openshift/open-telemetry-opentelemetry-operator) | Product/downstream fork of the operator, holds `rhosdt-x.y` branches used for QE product testing |
+| [open-telemetry-opentelemetry-operator](https://github.com/openshift/open-telemetry-opentelemetry-operator) | Product/downstream fork of the operator, holds `rhosdt-x.y`. Downstream productization repository |
 | [os-observability-opentelemetry-operator](https://github.com/os-observability/opentelemetry-operator) | Legacy Konflux fork of the operator (`rhosdt-3.7`–`3.11`), still used by `konflux-opentelemetry` submodules |
-| [ocp-build-data](https://github.com/openshift-eng/ocp-build-data)                                   | ART configuration for product builds, uses `rhosdt-x.y` branches |
+| [ocp-build-data](https://github.com/openshift-eng/ocp-build-data)                                   | ART configuration for product builds, uses `rhosdt-x.y` branches which match upstream operator version |
 | [konflux-release-data](https://gitlab.cee.redhat.com/releng/konflux-release-data)                    | Konflux configuration repository in `tenants-config/cluster/kflux-ocp-p01/tenants/art-rhosdt-tenant` |
 | [konflux-opentelemetry](https://github.com/os-observability/konflux-opentelemetry)                   | Downstream productization repository, contains all product components |
 | [konflux](https://gitlab.cee.redhat.com/distributed-tracing/konflux)                                  | Konflux release documentation and release payloads                    |

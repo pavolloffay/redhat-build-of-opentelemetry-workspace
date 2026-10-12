@@ -16,11 +16,11 @@ Answer questions about the ART build and productization process for Red Hat buil
 
 ## Downstream Repositories
 
-The downstream repositories contain downstream modifications and are built from `rhosdt-<version>` branches (e.g. `rhosdt-3.11`).
+The downstream repositories contain downstream modifications and are built from `rhosdt-<version>` branches (e.g. `rhosdt-0.158`) which matches the upstream version.
 
 | Repository | URL |
 |------------|-----|
-| opentelemetry-operator | https://github.com/openshift/open-telemetry-opentelemetry-operator |
+| open-telemetry-opentelemetry-operator | https://github.com/openshift/open-telemetry-opentelemetry-operator |
 | redhat-opentelemetry-collector | https://github.com/openshift/redhat-opentelemetry-collector |
 
 ## ART & Konflux Dashboards
@@ -35,6 +35,9 @@ The downstream repositories contain downstream modifications and are built from 
 
 
 ## Configuration
+
+* fbc-rhosdt-0-158 - 
+* rhosdt-0-158 - components e.g. `rhosdt-0-158-opentelemetry-collector`
 
 | Config | URL | Notes |
 |--------|-----|-------|
@@ -62,6 +65,7 @@ Advisories:
 | Konflux upstream docs | https://konflux-ci.dev/docs/ |
 | Konflux downstream docs | https://konflux.pages.redhat.com/docs/users/index.html |
 | Konflux architecture / API | https://github.com/konflux-ci/architecture |
+| Konflux portal | https://konflux.pages.redhat.com/konflux-portal/index.html |
 
 ## Contacts & Help Channels
 
@@ -78,7 +82,7 @@ Advisories:
 
 | Tool | URL | Notes |
 |------|-----|-------|
-| ART tooling (Doozer, ocp-build-data JSON schemas) | https://github.com/openshift-eng/art-tools | JSON schemas at `ocp-build-data-validator/validator/json_schemas` |
+| ART tooling (Doozer, ocp-build-data JSON schemas) | https://github.com/openshift-eng/art-tools | JSON schemas at `ocp-build-data-validator/validator/json_schemas`, release tekton pipelines |
 | Enterprise contract definition | https://github.com/release-engineering/rhtap-ec-policy | |
 | Konflux build definitions (pipelines, tasks) | https://github.com/konflux-ci/build-definitions | |
 | Konflux release pipeline | https://github.com/konflux-ci/release-service-catalog | |
@@ -107,3 +111,13 @@ See [RELEASE.md](RELEASE.md) for the release process (draft — will be complete
    ```
 1. **Apply the IDMS** — [idms.yaml](idms.yaml) mirrors `registry.redhat.io/rhosdt` to `registry.stage.redhat.io/rhosdt`. Remove any per-image OTEL mirror set left from the old Konflux flow to avoid conflicts. OCP 4.12 has no IDMS CRD; see `otel-qe-deploy-stage-build` for the `ImageContentSourcePolicy` equivalent.
 1. **Create the CatalogSource** — use [catalog-source.yaml](catalog-source.yaml) as a template, replacing the `image` field with the FBC image from `get-fbc-images.sh` for the cluster's OCP version. See `otel-qe-deploy-stage-build`'s `install-operators/otel.yaml` for a full example with Project, OperatorGroup, and Subscription.
+
+## Query old objects and logs from cluster
+
+Install KubeArchive `kubectl` plugin (`kubectl-ka`) https://konflux.pages.redhat.com/docs/users/faq/kubearchive.html
+
+```bash 
+KA_HOST=$(oc get cm -n product-kubearchive kubearchive-api-url -o jsonpath='{.data.URL}')
+kubectl ka config set host $KA_HOST
+kubectl ka get pipelinerun
+```
