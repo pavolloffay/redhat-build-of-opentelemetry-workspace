@@ -128,3 +128,16 @@ oras discover --format json "$IMAGE" \
   | xargs -I {} oras pull "quay.io/redhat-user-workloads/ocp-art-tenant/art-fbc@{}" \
   && cat related-images.json | jq -r '.[]'
 ```
+
+To also print the NVR (Name-Version-Release) for each related image (requires `podman login registry.stage.redhat.io`):
+```bash
+cat related-images.json | jq -r '.[]' | while read -r img; do
+  stage_img="${img/registry.redhat.io/registry.stage.redhat.io}"
+  nvr=$(skopeo inspect --no-tags --override-os linux --override-arch amd64 "docker://${stage_img}" 2>/dev/null \
+    | jq -r '(.Labels["com.redhat.component"] // "") + "-" + (.Labels["version"] // "") + "-" + (.Labels["release"] // "")' \
+    | grep -v '^--$')
+  echo "${nvr:-<no NVR>}  ${img}"
+done
+```
+
+The VNR cane be used to get the build and `PipelineRun` via the ART build history UI.
