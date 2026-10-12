@@ -17,8 +17,6 @@ list_tags() {
   done
 }
 
-all_digests=()
-
 images_yaml=$(list_tags \
   | jq -r --arg v "$VERSION" '
       select((.name | startswith("rhosdt-" + $v + "__v"))
@@ -31,7 +29,7 @@ images_yaml=$(list_tags \
 
       bundle_pullspec=""
       commit_url=""
-      if labels=$(skopeo inspect --no-tags "docker://${REPO}@${digest}" 2>/dev/null); then
+      if labels=$(skopeo inspect --no-tags --override-os linux --override-arch amd64 "docker://${REPO}@${digest}" 2>/dev/null); then
         bundle_pullspec=$(jq -r '.Labels["com.redhat.art.bundle.pullspec"] // empty' <<<"$labels")
         source_repo=$(jq -r '.Labels["io.openshift.build.source-location"] // empty' <<<"$labels")
         vcs_ref=$(jq -r '.Labels["io.openshift.build.commit.id"] // empty' <<<"$labels")

@@ -35,9 +35,6 @@ The downstream repositories contain downstream modifications and are built from 
 
 ## Configuration
 
-* fbc-rhosdt-0-158 - 
-* rhosdt-0-158 - components e.g. `rhosdt-0-158-opentelemetry-collector`
-
 | Config | URL | Notes |
 |--------|-----|-------|
 | Application & ReleasePlan | https://gitlab.cee.redhat.com/releng/konflux-release-data/-/tree/main/tenants-config/cluster/kflux-ocp-p01/tenants/art-rhosdt-tenant?ref_type=heads | |
@@ -115,7 +112,7 @@ See [RELEASE.md](RELEASE.md) for the release process (draft — will be complete
 
 Install KubeArchive `kubectl` plugin (`kubectl-ka`) https://konflux.pages.redhat.com/docs/users/faq/kubearchive.html
 
-```bash 
+```bash
 KA_HOST=$(oc get cm -n product-kubearchive kubearchive-api-url -o jsonpath='{.data.URL}')
 kubectl ka config set host $KA_HOST
 kubectl ka get pipelinerun
