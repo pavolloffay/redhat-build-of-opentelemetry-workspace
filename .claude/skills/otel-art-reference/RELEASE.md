@@ -24,6 +24,8 @@ Both are Tekton pipelines defined in [art-tools](https://github.com/openshift-en
 * `build-layered-products` — rebases and builds the RHOSDT operator/component images via Konflux (default: `openshift-opentelemetry-operator`), then triggers a downstream bundle build.
 * `build-fbc` — builds the File-Based Catalog (FBC) fragment image for a given OCP version, making the operator installable via OLM on that cluster version.
 
+Review the MR (e.g. the release notes) and approve it.
+
 ## Run `trigger-prod-release` pipeline
 Run `trigger-prod-release` pipeline to continue the release to production registry.
 The pipeline takes argument the merge request from the previous step to [hybrid-platforms/art/ocp-shipment-data](https://gitlab.cee.redhat.com/hybrid-platforms/art/ocp-shipment-data/).
@@ -31,6 +33,9 @@ The pipeline takes argument the merge request from the previous step to [hybrid-
 Create the [pipeline CR](./trigger-prod-release.yaml), replacing:
 * `<MR_IID>` — the merge request ID from the previous step (e.g. `742`)
 * `dry-run` — `true` (default). Set to `false` to actually trigger the prod release.
+
+The pipeline enables release to production registry on Gitlab MR pipeline. If the  Gitlab MR pipeline fails (or partly fails) just re-rerun the `trigger-prod-release`
+and the unreleased FBCs will re-run.
 
 ## Prepare for next release
 1. Operator CSV version in `bundle/opentelemetry-product.package.yaml` on the `rhosdt-<version>` branch
