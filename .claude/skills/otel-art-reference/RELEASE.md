@@ -15,14 +15,12 @@ Create the [pipeline CR](./release-from-fbc.yaml), replacing:
 * `<GROUP>` — e.g. `rhosdt-0.158` (the ocp-build-data group branch)
 * `<ASSEMBLY_VERSION>` — e.g. `0.158.0`
 * `<FBC_PULLSPECS>` — comma-separated FBC pullspecs from [get-fbc-images.sh](./get-fbc-images.sh)
+* `jira-bugs` - Comma-separated list of JIRA issue IDs to include in the advisory. CVE trackers need correct component label e.g. `pscomponent:rhosdt/opentelemetry-rhel9-operator`
 * `force` — `false` (default). Use `true` only when you want to override the existing shipment merge request.
 * `dry-run` — `false` (default). Set to `false` to actually create the shipment MR.
 
 The pipeline creates a shipment merge request in [hybrid-platforms/art/ocp-shipment-data](https://gitlab.cee.redhat.com/hybrid-platforms/art/ocp-shipment-data/) (e.g. https://gitlab.cee.redhat.com/hybrid-platforms/art/ocp-shipment-data/-/merge_requests/973),
-mark it ready, and trigger a GitLab CI pipeline on the MR. That CI pipeline runs one `build-fbc` pipeline for every supported OpenShift version and one `build-layered-products` pipeline.
-Both are Tekton pipelines defined in [art-tools](https://github.com/openshift-eng/art-tools) under `art-cluster/pipelines/config/argocd/project/art-rhosdt-tenant/`:
-* `build-layered-products` — rebases and builds the RHOSDT operator/component images via Konflux (default: `openshift-opentelemetry-operator`), then triggers a downstream bundle build.
-* `build-fbc` — builds the File-Based Catalog (FBC) fragment image for a given OCP version, making the operator installable via OLM on that cluster version.
+, and triggers a GitLab CI pipeline on the MR. The pipeline releases the images to stage again to make sure Conforama checks pass.
 
 Review the MR (e.g. the release notes) and approve it.
 

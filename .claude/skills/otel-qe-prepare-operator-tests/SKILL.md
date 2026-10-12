@@ -18,18 +18,18 @@ Use this skill when:
 
 ### Clone and Checkout Product Branch
 
-Ask the user for the release version (e.g. `3.11`) if not provided as an argument. Use `rhosdt-<version>` as the branch name throughout.
+Ask the user for the release version (e.g. `0.158`) if not provided as an argument. Use `rhosdt-<version>` as the branch name throughout.
 
 Two downstream forks exist:
-- `openshift/open-telemetry-opentelemetry-operator` — the ART-era fork, has `rhosdt-3.11` and later
+- `openshift/open-telemetry-opentelemetry-operator` — the ART-era fork, has `rhosdt-0.158` and later
 - `os-observability/opentelemetry-operator` — the legacy Konflux fork, has `rhosdt-3.7` through `rhosdt-3.11`
 
-For `rhosdt-3.11+`, use the `openshift` fork. For older versions, use the `os-observability` fork.
+For `rhosdt-0.158+`, use the `openshift` fork. For older versions, use the `os-observability` fork.
 
 The OCP CI stage and downstream jobs (`otel-qe-ocp-ci-tests`) clone `openshift/open-telemetry-opentelemetry-operator` directly and run the tests from `rhosdt-<version>`. The modifications below only take effect in those jobs once they are pushed to that fork's `rhosdt-<version>` branch. Applying them in a local clone, or pushing them to the `os-observability` fork, does not change what CI runs.
 
 ```bash
-# For rhosdt-3.11+:
+# For rhosdt-0.158+:
 git clone git@github.com:openshift/open-telemetry-opentelemetry-operator.git
 cd open-telemetry-opentelemetry-operator
 git checkout rhosdt-<version>
@@ -88,7 +88,7 @@ if [ -n "$FILES" ]; then
 fi
 ```
 
-The CI stage and downstream jobs run the branch as it is and do not apply this `sed`, so the result must be committed to the fork. `rhosdt-3.11` is already clean; run it again after copying new tests from distributed-tracing-qe, and push the result.
+The CI stage and downstream jobs run the branch as it is and do not apply this `sed`, so the result must be committed to the fork. `rhosdt-0.158` is already clean; run it again after copying new tests from distributed-tracing-qe, and push the result.
 
 ### Remove nodeAffinity from Target Allocator Tests
 

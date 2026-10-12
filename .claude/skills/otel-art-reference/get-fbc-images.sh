@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-VERSION="${1:?Usage: $0 <rhosdt-version> (e.g. 3.11)}"
+VERSION="${1:?Usage: $0 <rhosdt-version> (e.g. 0.158)}"
 REPO="quay.io/redhat-user-workloads/ocp-art-tenant/art-fbc"
 API="https://quay.io/api/v1/repository/redhat-user-workloads/ocp-art-tenant/art-fbc/tag/"
 
@@ -29,8 +29,10 @@ images_yaml=$(list_tags \
   | while IFS=$'\t' read -r tag digest last_modified; do
       ocp="${tag#*__}" && ocp="${ocp%%__*}"
 
+      bundle_pullspec=""
       commit_url=""
       if labels=$(skopeo inspect --no-tags "docker://${REPO}@${digest}" 2>/dev/null); then
+        bundle_pullspec=$(jq -r '.Labels["com.redhat.art.bundle.pullspec"] // empty' <<<"$labels")
         source_repo=$(jq -r '.Labels["io.openshift.build.source-location"] // empty' <<<"$labels")
         vcs_ref=$(jq -r '.Labels["io.openshift.build.commit.id"] // empty' <<<"$labels")
         if [[ -n "$source_repo" && -n "$vcs_ref" ]]; then
@@ -44,19 +46,22 @@ images_yaml=$(list_tags \
       echo "  created: ${last_modified}"
       echo "  image: ${REPO}:${tag}"
       echo "  image_by_digest: ${REPO}@${digest}"
+      if [[ -n "$bundle_pullspec" ]]; then
+        echo "  bundle_pullspec: ${bundle_pullspec}"
+      fi
       if [[ -n "$commit_url" ]]; then
         echo "  commit_url: ${commit_url}"
       fi
     done)
 
-commit_urls=$(echo "$images_yaml" | grep 'commit_url:' | awk '{print $2}' | sort -u)
-num_unique=$(echo "$commit_urls" | wc -l)
-if [[ -z "$commit_urls" ]]; then
-  echo "ERROR: no commit_url found in any image" >&2
+bundle_pullspecs=$(echo "$images_yaml" | { grep 'bundle_pullspec:' || true; } | awk '{print $2}' | sort -u)
+num_bundles=$(echo "$bundle_pullspecs" | grep -c . || true)
+if [[ "$num_bundles" -eq 0 ]]; then
+  echo "ERROR: no bundle_pullspec label found in any image (requires art-tools with com.redhat.art.bundle.pullspec support)" >&2
   exit 1
-elif [[ "$num_unique" -gt 1 ]]; then
-  echo "ERROR: not all images were built from the same commit:" >&2
-  echo "$images_yaml" | grep -E '(ocp_version|commit_url):' | paste - - | awk '{print "  " $0}' >&2
+elif [[ "$num_bundles" -gt 1 ]]; then
+  echo "ERROR: not all FBC images contain the same bundle build:" >&2
+  echo "$images_yaml" | grep -E '(ocp_version|bundle_pullspec):' | paste - - | awk '{print "  " $0}' >&2
   exit 1
 fi
 

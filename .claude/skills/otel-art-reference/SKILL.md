@@ -3,10 +3,8 @@ name: otel-art-reference
 description: >
   Reference skill for ART (Automated Release Tool) build and productization of
   Red Hat build of OpenTelemetry. Use when the user asks about ART builds, ART
-  Konflux tenant configuration, image locations in ART pipelines, or release
-  promotion. Not for the legacy os-observability Konflux flow (still used for
-  Tempo) — see otel-qe-prepare-konflux-tests for that. QE use of the ART
-  builds is in otel-qe-ocp-ci-tests and otel-qe-deploy-stage-build.
+  Konflux tenant configuration, image locations, ART pipelines or release.
+  Not for the legacy os-observability Konflux flow.
 argument-hint: "[question about ART/Konflux builds or configuration]"
 ---
 
@@ -30,7 +28,8 @@ The downstream repositories contain downstream modifications and are built from 
 | Konflux UI | https://konflux-ui.apps.kflux-ocp-p01.7ayg.p1.openshiftapps.com/ns/art-rhosdt-tenant/applications |
 | OpenShift UI (Konflux components) | https://console-openshift-console.apps.kflux-ocp-p01.7ayg.p1.openshiftapps.com/pipelines/ns/art-rhosdt-tenant/pipeline-runs |
 | OpenShift UI (ART run release pipeline) | https://console-openshift-console.apps.artc2023.pc3z.p1.openshiftapps.com/pipelines/ns/art-rhosdt-tenant/ |
-| ART build history | https://art-build-history-art-build-history.apps.artc2023.pc3z.p1.openshiftapps.com/?group=rhosdt-3.11&assembly=stream&outcome=Success&outcome=Failure&outcome=Pending&engine=konflux&hermetic=both&buildtype=image&buildtype=bundle&buildtype=fbc |
+| ART build history | https://art-build-history-art-build-history.apps.artc2023.pc3z.p1.openshiftapps.com/?group=rhosdt-0.158&assembly=stream&outcome=Success&outcome=Failure&outcome=Pending&engine=konflux&hermetic=both&buildtype=image&buildtype=bundle&buildtype=fbc |
+| ART Pipelines | https://art-pipelines-ui-art-pipelines-ui.apps.artc2023.pc3z.p1.openshiftapps.com/#/health?namespace=art-rhosdt-tenant |
 | Browse images (Quay) | https://quay.io/repository/redhat-user-workloads/ocp-art-tenant/art-fbc?tab=tags (filter `rhosdt`) |
 
 
@@ -46,7 +45,7 @@ The downstream repositories contain downstream modifications and are built from 
 | RPA Constraint | https://gitlab.cee.redhat.com/releng/konflux-release-data/-/blob/main/constraints/product/art-rhosdt.yaml?ref_type=heads | |
 | Enterprise Contract | https://gitlab.cee.redhat.com/releng/konflux-release-data/-/tree/main/config/kflux-ocp-p01.7ayg.p1/product/EnterpriseContractPolicy?ref_type=heads | |
 | Prodsec / CPE | https://gitlab.cee.redhat.com/releng/konflux-release-data/-/blob/main/prodsec/art-rhosdt.yaml?ref_type=heads | |
-| ocp-build-data | https://github.com/openshift-eng/ocp-build-data | `main` has config examples only. Product config is on `rhosdt-<version>` branches — checkout the target version after cloning. PRs must be approved by ART team. |
+| ocp-build-data | https://github.com/openshift-eng/ocp-build-data | `main` has config examples, release notes template (`./config/advisory-templates.yaml`), Jira mapping (`./product.yaml`) . Product config is on `rhosdt-<version>` branches — checkout the target version after cloning. PRs must be approved by ART team. |
 | ART product maps | https://github.com/openshift-eng/art-tools/blob/main/artcommon/artcommonlib/constants.py | |
 | openshift-priv whitelist | https://github.com/openshift/release/blob/main/core-services/openshift-priv/_whitelist.yaml | Repositories for embargoed CVEs |
 | Product pages / lifecycle | https://redhat.atlassian.net/servicedesk/customer/portal/238 | Service desk to request updates |
@@ -93,7 +92,7 @@ Advisories:
 
 Use [get-fbc-images.sh](get-fbc-images.sh) to list the latest FBC image for each supported OCP version. It reads only active tags and follows the Quay pagination. The floating tag `rhosdt-<ver>__v<ocp>__opentelemetry-rhel9-operator` always points to the latest build; tags with a `__g<hash>` suffix are pinned to a specific git commit, but ART re-pushes those as well.
 ```bash
-./get-fbc-images.sh 3.11
+./get-fbc-images.sh 0.158
 ```
 The images are multi-arch. Pin by digest (`image_by_digest`) for CI and for reproducing a result, because only the digest does not change; use the floating tag (`image`) for ad-hoc installs on a cluster.
 
@@ -120,4 +119,15 @@ Install KubeArchive `kubectl` plugin (`kubectl-ka`) https://konflux.pages.redhat
 KA_HOST=$(oc get cm -n product-kubearchive kubearchive-api-url -o jsonpath='{.data.URL}')
 kubectl ka config set host $KA_HOST
 kubectl ka get pipelinerun
+```
+
+## Get related images from FBC
+
+Use `oras` to extract the `related-images.json` artifact attached to an FBC image:
+```bash
+IMAGE=quay.io/redhat-user-workloads/ocp-art-tenant/art-fbc@sha256:...
+oras discover --format json "$IMAGE" \
+  | jq -r '.manifests[] | select(.artifactType == "application/vnd.konflux-ci.attached-artifact" and .annotations.attachedMediaType == "application/vnd.konflux-ci.attached-artifact.related-images+json") | .digest' \
+  | xargs -I {} oras pull "quay.io/redhat-user-workloads/ocp-art-tenant/art-fbc@{}" \
+  && cat related-images.json | jq -r '.[]'
 ```
