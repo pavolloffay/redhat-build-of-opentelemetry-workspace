@@ -140,4 +140,4 @@ cat related-images.json | jq -r '.[]' | while read -r img; do
 done
 ```
 
-The VNR cane be used to get the build and `PipelineRun` via the ART build history UI.
+The NVR can be used to get the build and `PipelineRun` via the ART build history UI.
