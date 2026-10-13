@@ -19,8 +19,7 @@ Create the [pipeline CR](./release-from-fbc.yaml), replacing:
 * `force` — the template sets `false`. Set to `true` to override the existing shipment merge request.
 * `dry-run` — the template sets `true`. Set to `false` to actually create the shipment MR.
 
-The pipeline creates a shipment merge request in [hybrid-platforms/art/ocp-shipment-data](https://gitlab.cee.redhat.com/hybrid-platforms/art/ocp-shipment-data/) (e.g. https://gitlab.cee.redhat.com/hybrid-platforms/art/ocp-shipment-data/-/merge_requests/973),
-, and triggers a GitLab CI pipeline on the MR. The pipeline releases the images to stage again to make sure Conforama checks pass.
+The pipeline creates a shipment merge request in [hybrid-platforms/art/ocp-shipment-data](https://gitlab.cee.redhat.com/hybrid-platforms/art/ocp-shipment-data/) (e.g. https://gitlab.cee.redhat.com/hybrid-platforms/art/ocp-shipment-data/-/merge_requests/973), and triggers a GitLab CI pipeline on the MR. The pipeline releases the images to stage again to make sure Conforma checks pass.
 
 Review the MR (e.g. the release notes) and approve it.
 

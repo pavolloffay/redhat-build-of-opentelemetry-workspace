@@ -49,6 +49,13 @@ The downstream repositories contain downstream modifications and are built from 
 | Configure Github apps/repositories | https://devservices.dpp.openshift.com/support/general_request/?template=general_github_ticket | Enable [Konflux app](https://github.com/apps/konflux-kflux-ocp-p01), ask in [#forum-pge-cloud-ops](https://redhat.enterprise.slack.com/archives/CBUT43E94)  |
 | Prodsec product definitions | https://gitlab.cee.redhat.com/prodsec/product-definitions/-/tree/master?ref_type=heads | Sources data from product and lifecycle pages |
 
+### Konflux Applications (art-rhosdt-tenant)
+
+| Application | Purpose |
+|-------------|---------|
+| `rhosdt-0-158` | Operator and collector component builds (images, bundles) |
+| `fbc-rhosdt-0-158` | File-Based Catalog (FBC) fragment builds for each supported OCP version |
+
 Advisories:
 * [Konflux stage advisories](https://gitlab.cee.redhat.com/rhtap-release/advisories/-/tree/main/data/advisories/art-rhosdt-tenant)
 * [Konflux prod advisories](https://gitlab.cee.redhat.com/releng/advisories/-/blob/main/data/advisories/art-rhosdt-tenant)

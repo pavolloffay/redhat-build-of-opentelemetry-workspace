@@ -72,5 +72,5 @@ not supported.
 
 To start QE release testing for a new RHOSDT OTEL version:
 
-1. Run the `/otel-qe-release-testing-epic` skill with the release version (e.g. `0.158`) and the assignee for the work. It creates (or reuses) the Jira Epic that tracks release testing and populates it with the standard set of Tasks.
+1. Run the `/otel-qe-release-testing-epic` skill with the release version (e.g. `3.12`) and the assignee for the work. It creates (or reuses) the Jira Epic that tracks release testing and populates it with the standard set of Tasks.
 2. Follow the Epic and work through its Tasks — each Task's description points at the QE skill to use for that piece of testing.

@@ -63,7 +63,7 @@ elif [[ "$num_bundles" -gt 1 ]]; then
   exit 1
 fi
 
-pullspecs=$(echo "$images_yaml" | grep 'image_by_digest:' | awk '{print $2}' | paste -sd,)
+pullspecs=$(echo "$images_yaml" | grep 'image_by_digest:' | awk '{print $2}' | paste -sd, -)
 
 echo "rhosdt_version: '${VERSION}'"
 echo "pullspecs: '${pullspecs}'"
