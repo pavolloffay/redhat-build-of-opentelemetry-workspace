@@ -28,7 +28,7 @@ What else to check depends on the release:
 * **Major and minor releases (a new version, a new ART group):** check the integration tests as above, and the OCP CI jobs (stage jobs in `release` on the same FBC images, set up with the `otel-qe-ocp-ci-tests` skill). The release tracker is the Epic `[QE] Verify RHOSDT <version> OTEL release`, created by the `otel-qe-release-testing-epic` skill, and its Tasks must be done (IBM P and Z, release notes and documentation, CVE and bug fixes).
 
 ## Run `release-from-fbc` pipeline
-Create the [pipeline CR](./release-from-fbc.yaml), replacing:
+Create the [pipeline CR](./release-from-fbc.yaml) or via [UI](https://console-openshift-console.apps.artc2023.pc3z.p1.openshiftapps.com/k8s/ns/art-rhosdt-tenant/tekton.dev~v1~Pipeline/release-from-fbc), replacing:
 * `<GROUP>` — e.g. `rhosdt-0.158` (the ocp-build-data group branch)
 * `<ASSEMBLY_VERSION>` — e.g. `0.158.0`
 * `<FBC_PULLSPECS>` — comma-separated FBC pullspecs from [get-fbc-images.sh](./get-fbc-images.sh)
@@ -38,7 +38,7 @@ Create the [pipeline CR](./release-from-fbc.yaml), replacing:
 
 The pipeline creates a shipment merge request in [hybrid-platforms/art/ocp-shipment-data](https://gitlab.cee.redhat.com/hybrid-platforms/art/ocp-shipment-data/) (e.g. https://gitlab.cee.redhat.com/hybrid-platforms/art/ocp-shipment-data/-/merge_requests/973), and triggers a GitLab CI pipeline on the MR. The pipeline releases the images to stage again to make sure Conforma checks pass.
 
-Review the MR (e.g. the release notes) and approve it.
+Review the MR (e.g. the release notes), approve it and wait until the Gitlab `release-stage` pipeline completes. Restart the individual jobs in case of failure.
 
 ## Run `trigger-prod-release` pipeline
 Run `trigger-prod-release` pipeline to continue the release to production registry.
@@ -52,14 +52,15 @@ The pipeline enables release to production registry on Gitlab MR pipeline. If th
 and the unreleased FBCs will rerun.
 
 ## Prepare for next release
-1. Operator CSV version in `bundle/opentelemetry-product.package.yaml` on the `rhosdt-<version>` branch
-1. Bundle CSV modifications (`version`, `replaces`, `name`) in `bundle/art.yaml`
 
-### New ART group (a new `rhosdt-<version>` branch)
-We follow the rolling release model, so only the latest version is supported and tested. Every new major or minor operator version gets a new `rhosdt-<version>` branch and a new ART group; patch and CVE fix releases stay on the branch.
+### Patch release
+No changes in the bundle/`CSV` or ART configuration files are required.
+
+### Major or minor version (a new `rhosdt-<version>` branch)
+Every new major or minor operator version gets a new `rhosdt-<version>` branch and a new ART group; patch and CVE fix releases stay on the branch.
 1. Request new branches in `ocp-build-data` from the ART team
 1. Update version in `ocp-build-data`  in `group.yml` on the `rhosdt-<version>` branch (only for a new major or minor version)
 1. Create downstream branches - copy ART configuration `bundle`/[`art.yaml`, `image-references`, `opentelemetry-product.package.yaml`] with `Dockerfile.art` and `renovate.json`.
-1. Update versions in the ART configuration files in `bundle`
+1. Update versions in the ART configuration files: `bundle/opentelemetry-product.package.yaml` and `bundle/art.yaml`
 1. Update the CI with the `otel-qe-prepare-ci` skill: move the pre-merge CI config of the operator and of the collector in `release` to the new branch, and replace the Konflux integration test scenarios of the previous release with the ones of the new ART group. A patch or CVE fix release needs no change in either place.
-1. Configure mintmaker for new downstream branches in `konflux-release-data`
+1. Configure mintmaker on new branches in `konflux-release-data`
