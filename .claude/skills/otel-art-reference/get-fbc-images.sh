@@ -29,6 +29,7 @@ images_yaml=$(list_tags \
 
       bundle_pullspec=""
       commit_url=""
+      nvr=""
       if labels=$(skopeo inspect --no-tags --override-os linux --override-arch amd64 "docker://${REPO}@${digest}" 2>/dev/null); then
         bundle_pullspec=$(jq -r '.Labels["com.redhat.art.bundle.pullspec"] // empty' <<<"$labels")
         source_repo=$(jq -r '.Labels["io.openshift.build.source-location"] // empty' <<<"$labels")
@@ -36,6 +37,7 @@ images_yaml=$(list_tags \
         if [[ -n "$source_repo" && -n "$vcs_ref" ]]; then
           commit_url="${source_repo}/commit/${vcs_ref}"
         fi
+        nvr=$(jq -r '.Labels["com.redhat.art.nvr"] // empty' <<<"$labels")
       fi
 
       echo "- ocp_version: ${ocp}"
@@ -50,6 +52,9 @@ images_yaml=$(list_tags \
       if [[ -n "$commit_url" ]]; then
         echo "  commit_url: ${commit_url}"
       fi
+      if [[ -n "$nvr" ]]; then
+        echo "  nvr: ${nvr}"
+      fi
     done)
 
 bundle_pullspecs=$(echo "$images_yaml" | { grep 'bundle_pullspec:' || true; } | awk '{print $2}' | sort -u)
@@ -59,7 +64,9 @@ if [[ "$num_bundles" -eq 0 ]]; then
   exit 1
 elif [[ "$num_bundles" -gt 1 ]]; then
   echo "ERROR: not all FBC images contain the same bundle build:" >&2
-  echo "$images_yaml" | grep -E '(ocp_version|bundle_pullspec):' | paste - - | awk '{print "  " $0}' >&2
+  echo "$images_yaml" | grep -E '(ocp_version|image_by_digest|bundle_pullspec|commit_url|nvr):' \
+    | sed 's/^  //' \
+    | awk '/^ocp_version:/ { if (NR>1) print ""; print "- " $0; next } { print "  " $0 }' >&2
   exit 1
 fi
 
