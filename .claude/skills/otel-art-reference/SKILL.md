@@ -38,7 +38,7 @@ The downstream repositories contain downstream modifications and are built from 
 
 | Config | URL | Notes |
 |--------|-----|-------|
-| Application & ReleasePlan | https://gitlab.cee.redhat.com/releng/konflux-release-data/-/tree/main/tenants-config/cluster/kflux-ocp-p01/tenants/art-rhosdt-tenant?ref_type=heads | |
+| Application & ReleasePlan, Mintmaker | https://gitlab.cee.redhat.com/releng/konflux-release-data/-/tree/main/tenants-config/cluster/kflux-ocp-p01/tenants/art-rhosdt-tenant?ref_type=heads | |
 | ReleasePlanAdmission (RPA) | https://gitlab.cee.redhat.com/releng/konflux-release-data/-/tree/main/config/kflux-ocp-p01.7ayg.p1/product/ReleasePlanAdmission/art-rhosdt?ref_type=heads | |
 | RPA Constraint | https://gitlab.cee.redhat.com/releng/konflux-release-data/-/blob/main/constraints/product/art-rhosdt.yaml?ref_type=heads | |
 | Enterprise Contract | https://gitlab.cee.redhat.com/releng/konflux-release-data/-/tree/main/config/kflux-ocp-p01.7ayg.p1/product/EnterpriseContractPolicy?ref_type=heads | |
@@ -48,7 +48,9 @@ The downstream repositories contain downstream modifications and are built from 
 | openshift-priv whitelist | https://github.com/openshift/release/blob/main/core-services/openshift-priv/_whitelist.yaml | Repositories for embargoed CVEs |
 | Product pages / lifecycle | https://redhat.atlassian.net/servicedesk/customer/portal/238 | Service desk to request updates |
 | Configure Github apps/repositories | https://devservices.dpp.openshift.com/support/general_request/?template=general_github_ticket | Enable [Konflux app](https://github.com/apps/konflux-kflux-ocp-p01), ask in [#forum-pge-cloud-ops](https://redhat.enterprise.slack.com/archives/CBUT43E94)  |
+| github.com/openshift repository permissions | https://gitlab.cee.redhat.com/hybrid-platforms/org/-/tree/main/ |
 | Prodsec product definitions | https://gitlab.cee.redhat.com/prodsec/product-definitions/-/tree/master?ref_type=heads | Sources data from product and lifecycle pages |
+| Auto merge for Mintmaker | https://github.com/openshift/release/blob/main/core-services/prow/02_config/openshift/open-telemetry-opentelemetry-operator/_prowconfig.yaml#L11 |
 
 ### Konflux Applications (art-rhosdt-tenant)
 
