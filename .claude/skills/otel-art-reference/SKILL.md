@@ -134,24 +134,10 @@ kubectl ka get pipelinerun
 
 ## Get related images from FBC
 
-Use `oras` to extract the `related-images.json` artifact attached to an FBC image:
+Use [get-related-images.sh](get-related-images.sh) to extract the related images from an FBC image and resolve each image's source repo and commit. It uses the `related-images.json` artifact attached to the FBC image by Konflux.
 ```bash
-IMAGE=quay.io/redhat-user-workloads/ocp-art-tenant/art-fbc@sha256:...
-oras discover --format json "$IMAGE" \
-  | jq -r '.manifests[] | select(.artifactType == "application/vnd.konflux-ci.attached-artifact" and .annotations.attachedMediaType == "application/vnd.konflux-ci.attached-artifact.related-images+json") | .digest' \
-  | xargs -I {} oras pull "quay.io/redhat-user-workloads/ocp-art-tenant/art-fbc@{}" \
-  && cat related-images.json | jq -r '.[]'
+./get-related-images.sh quay.io/redhat-user-workloads/ocp-art-tenant/art-fbc:rhosdt-0.158__v4.17__opentelemetry-rhel9-operator
+./get-related-images.sh quay.io/redhat-user-workloads/ocp-art-tenant/art-fbc@sha256:...
 ```
 
-To also print the NVR (Name-Version-Release) for each related image (requires `podman login registry.stage.redhat.io`):
-```bash
-cat related-images.json | jq -r '.[]' | while read -r img; do
-  stage_img="${img/registry.redhat.io/registry.stage.redhat.io}"
-  nvr=$(skopeo inspect --no-tags --override-os linux --override-arch amd64 "docker://${stage_img}" 2>/dev/null \
-    | jq -r '(.Labels["com.redhat.component"] // "") + "-" + (.Labels["version"] // "") + "-" + (.Labels["release"] // "")' \
-    | grep -v '^--$')
-  echo "${nvr:-<no NVR>}  ${img}"
-done
-```
-
-The NVR can be used to get the build and `PipelineRun` via the ART build history UI.
+The output includes the Name-Version-Release (NVR) can be used to get the build and `PipelineRun` via the ART build history UI.
