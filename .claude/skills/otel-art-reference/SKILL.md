@@ -133,12 +133,12 @@ kubectl ka config set host $KA_HOST
 kubectl ka get pipelinerun
 ```
 
-## Get related images from FBC
+## Get FBC content (related images and rendered catalog)
 
-Use [get-related-images.sh](get-related-images.sh) to extract the related images from an FBC image and resolve each image's source repo and commit. It uses the `related-images.json` artifact attached to the FBC image by Konflux.
+Use [get-fbc-content.sh](get-fbc-content.sh) to extract the related images and rendered catalog from an FBC image. It resolves each related image's source repo, commit, NVR and build date, and saves the rendered catalog as `catalog.yaml` in the current directory.
 ```bash
-./get-related-images.sh quay.io/redhat-user-workloads/ocp-art-tenant/art-fbc:rhosdt-0.158__v4.17__opentelemetry-rhel9-operator
-./get-related-images.sh quay.io/redhat-user-workloads/ocp-art-tenant/art-fbc@sha256:...
+./get-fbc-content.sh quay.io/redhat-user-workloads/ocp-art-tenant/art-fbc:rhosdt-0.158__v4.17__opentelemetry-rhel9-operator
+./get-fbc-content.sh quay.io/redhat-user-workloads/ocp-art-tenant/art-fbc@sha256:...
 ```
 
-The output includes the Name-Version-Release (NVR) can be used to get the build and `PipelineRun` via the ART build history UI.
+The output includes the Name-Version-Release (NVR) which can be used to get the build and `PipelineRun` via the ART build history UI.

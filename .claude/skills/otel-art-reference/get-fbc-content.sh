@@ -25,6 +25,20 @@ if [[ ! -f "$TMPDIR/related-images.json" ]]; then
   exit 1
 fi
 
+# Extract the rendered catalog
+CATALOG_DIGEST=$(oras discover --format json "$FBC_IMAGE" \
+  | jq -r '.manifests[] | select(.artifactType == "application/vnd.konflux-ci.attached-artifact" and .annotations.attachedMediaType == "application/vnd.konflux-ci.attached-artifact.rendered-catalog+json") | .digest')
+
+CATALOG_FILE=""
+if [[ -n "$CATALOG_DIGEST" ]]; then
+  oras pull "${REPO}@${CATALOG_DIGEST}" --output "$TMPDIR" >/dev/null 2>&1
+  if [[ -f "$TMPDIR/catalog.json" ]]; then
+    CATALOG_FILE="$TMPDIR/catalog.json"
+  fi
+else
+  echo "WARNING: no rendered-catalog artifact found on ${FBC_IMAGE}" >&2
+fi
+
 # For each related image, inspect to get source repo and commit
 python3 -I -c '
 import json, sys, subprocess
@@ -89,4 +103,21 @@ for r in results:
         print("    build_date: " + json.dumps(r["build_date"]))
     if "commit_url" in r:
         print("    commit_url: " + json.dumps(r["commit_url"]))
-' "$FBC_IMAGE" "$TMPDIR/related-images.json"
+
+catalog_file = sys.argv[3] if len(sys.argv) > 3 else ""
+if catalog_file:
+    import yaml
+    decoder = json.JSONDecoder()
+    with open(catalog_file) as f:
+        content = f.read()
+    idx = 0
+    while idx < len(content):
+        stripped = content[idx:].lstrip()
+        if not stripped:
+            break
+        idx = len(content) - len(stripped)
+        obj, end = decoder.raw_decode(content, idx)
+        print("---")
+        yaml.dump(obj, sys.stdout, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        idx += end - idx
+' "$FBC_IMAGE" "$TMPDIR/related-images.json" ${CATALOG_FILE:+"$CATALOG_FILE"}
