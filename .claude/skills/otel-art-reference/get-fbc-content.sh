@@ -9,8 +9,9 @@ trap 'rm -rf "$TMPDIR"' EXIT
 REPO="${FBC_IMAGE%%@*}"
 REPO="${REPO%%:*}"
 
-# Extract the related-images.json artifact attached to the FBC image
-DIGEST=$(oras discover --format json "$FBC_IMAGE" \
+DISCOVER_JSON=$(oras discover --format json "$FBC_IMAGE")
+
+DIGEST=$(echo "$DISCOVER_JSON" \
   | jq -r '.manifests[] | select(.artifactType == "application/vnd.konflux-ci.attached-artifact" and .annotations.attachedMediaType == "application/vnd.konflux-ci.attached-artifact.related-images+json") | .digest')
 
 if [[ -z "$DIGEST" ]]; then
@@ -25,22 +26,26 @@ if [[ ! -f "$TMPDIR/related-images.json" ]]; then
   exit 1
 fi
 
-# Extract the rendered catalog
-CATALOG_DIGEST=$(oras discover --format json "$FBC_IMAGE" \
+CATALOG_DIGEST=$(echo "$DISCOVER_JSON" \
   | jq -r '.manifests[] | select(.artifactType == "application/vnd.konflux-ci.attached-artifact" and .annotations.attachedMediaType == "application/vnd.konflux-ci.attached-artifact.rendered-catalog+json") | .digest')
 
 CATALOG_FILE=""
 if [[ -n "$CATALOG_DIGEST" ]]; then
-  oras pull "${REPO}@${CATALOG_DIGEST}" --output "$TMPDIR" >/dev/null 2>&1
-  if [[ -f "$TMPDIR/catalog.json" ]]; then
-    CATALOG_FILE="$TMPDIR/catalog.json"
+  if oras pull "${REPO}@${CATALOG_DIGEST}" --output "$TMPDIR" >/dev/null 2>&1; then
+    if [[ -f "$TMPDIR/catalog.json" ]]; then
+      CATALOG_FILE="$TMPDIR/catalog.json"
+    else
+      echo "WARNING: catalog.json not found in rendered-catalog artifact" >&2
+    fi
+  else
+    echo "WARNING: failed to pull rendered-catalog artifact" >&2
   fi
 else
   echo "WARNING: no rendered-catalog artifact found on ${FBC_IMAGE}" >&2
 fi
 
 # For each related image, inspect to get source repo and commit
-python3 -I -c '
+python3 -c '
 import json, sys, subprocess
 
 fbc_image = sys.argv[1]

@@ -5,8 +5,7 @@ metadata:
   namespace: openshift-marketplace
 spec:
   sourceType: grpc
-#  image: <REPLACE with FBC image from get-fbc-images.sh for this OCP version>
-  image: quay.io/redhat-user-workloads/ocp-art-tenant/art-fbc@sha256:26219d099c40addce5542347b80288b14864f3e42082ed6a82b33d0306e87c75
+  image: <REPLACE with FBC image from get-fbc-images.sh for this OCP version>
   publisher: art
   updateStrategy:
     registryPoll:

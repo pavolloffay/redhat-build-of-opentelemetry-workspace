@@ -135,7 +135,7 @@ kubectl ka get pipelinerun
 
 ## Get FBC content (related images and rendered catalog)
 
-Use [get-fbc-content.sh](get-fbc-content.sh) to extract the related images and rendered catalog from an FBC image. It resolves each related image's source repo, commit, NVR and build date, and saves the rendered catalog as `catalog.yaml` in the current directory.
+Use [get-fbc-content.sh](get-fbc-content.sh) to extract the related images and rendered catalog from an FBC image. It resolves each related image's source repo, commit, NVR and build date. The rendered catalog is printed to stdout as `---`-separated JSON documents after the related-images block.
 ```bash
 ./get-fbc-content.sh quay.io/redhat-user-workloads/ocp-art-tenant/art-fbc:rhosdt-0.158__v4.17__opentelemetry-rhel9-operator
 ./get-fbc-content.sh quay.io/redhat-user-workloads/ocp-art-tenant/art-fbc@sha256:...
