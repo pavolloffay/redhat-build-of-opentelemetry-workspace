@@ -62,7 +62,7 @@ No changes in the bundle/`CSV` or ART configuration files are required.
 Every new major or minor operator version gets a new `rhosdt-<version>` branch and a new ART group; patch and CVE fix releases stay on the branch.
 1. Request new branches in `ocp-build-data` from the ART team
 1. Update version in `ocp-build-data`  in `group.yml` on the `rhosdt-<version>` branch (only for a new major or minor version)
-1. Create downstream branches - copy ART configuration `bundle`/[`art.yaml`, `image-references`, `opentelemetry-product.package.yaml`] with `Dockerfile.art` and `renovate.json`.
+1. Create downstream branches - copy ART configuration `bundle`/[`art.yaml`, `image-references`, `opentelemetry-product.package.yaml`] with `Dockerfile.art`, `renovate.json` and `fips-allowlist.yaml`.
 1. Update versions in the ART configuration files: `bundle/opentelemetry-product.package.yaml` and `bundle/art.yaml`
 1. Update the CI with the `/otel-qe-prepare-ci` skill: move the pre-merge CI config of the operator and of the collector in `release` to the new branch, and replace the Konflux integration test scenarios of the previous release with the ones of the new ART group. A patch or CVE fix release needs no change in either place.
 1. Configure mintmaker on new branches in `konflux-release-data`
