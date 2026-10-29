@@ -1,7 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
-VERSION="${1:?Usage: $0 <rhosdt-version> (e.g. 0.158)}"
+VERSION="${1:?Usage: $0 <rhosdt-version> (e.g. 0.158) [commit-sha]}"
+# Optional upstream commit SHA (full or short): lists the FBC images pinned to that
+# commit via the __g<short-sha> tag suffix instead of the latest floating build.
+COMMIT="${2:-}"
+COMMIT="${COMMIT:0:7}"
 REPO="quay.io/redhat-user-workloads/ocp-art-tenant/art-fbc"
 API="https://quay.io/api/v1/repository/redhat-user-workloads/ocp-art-tenant/art-fbc/tag/"
 
@@ -18,9 +22,11 @@ list_tags() {
 }
 
 images_yaml=$(list_tags \
-  | jq -r --arg v "$VERSION" '
-      select((.name | startswith("rhosdt-" + $v + "__v"))
-             and (.name | test("^rhosdt-[0-9.]+__v[0-9.]+__opentelemetry-rhel9-operator$")))
+  | jq -r --arg v "$VERSION" --arg c "$COMMIT" '
+      select(.name | startswith("rhosdt-" + $v + "__v"))
+      | select(.name | test(
+          if $c == "" then "^rhosdt-[0-9.]+__v[0-9.]+__opentelemetry-rhel9-operator$"
+          else "__g" + $c + "$" end))
       | [.name, .manifest_digest, .last_modified] | @tsv' \
   | sort -u -t'	' -k1,1 \
   | sort -t_ -k3 -V \
@@ -36,6 +42,9 @@ images_yaml=$(list_tags \
         vcs_ref=$(jq -r '.Labels["io.openshift.build.commit.id"] // empty' <<<"$labels")
         if [[ -n "$source_repo" && -n "$vcs_ref" ]]; then
           commit_url="${source_repo}/commit/${vcs_ref}"
+        fi
+        if [[ -n "$COMMIT" && -n "$vcs_ref" && "$vcs_ref" != "$COMMIT"* ]]; then
+          echo "WARNING: tag ${tag} is pinned to ${COMMIT} but the image reports commit ${vcs_ref}" >&2
         fi
         nvr=$(jq -r '.Labels["com.redhat.art.nvr"] // empty' <<<"$labels")
       fi
@@ -56,6 +65,11 @@ images_yaml=$(list_tags \
         echo "  nvr: ${nvr}"
       fi
     done)
+
+if [[ -z "$(echo "$images_yaml" | grep '^  tag:')" ]]; then
+  echo "ERROR: no FBC images found for rhosdt-${VERSION}${COMMIT:+ built from commit ${COMMIT}}" >&2
+  exit 1
+fi
 
 bundle_pullspecs=$(echo "$images_yaml" | { grep 'bundle_pullspec:' || true; } | awk '{print $2}' | sort -u)
 num_bundles=$(echo "$bundle_pullspecs" | grep -c . || true)

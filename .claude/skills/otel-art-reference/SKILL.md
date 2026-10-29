@@ -98,9 +98,13 @@ Advisories:
 
 ## FBC images
 
-Use [get-fbc-images.sh](get-fbc-images.sh) to list the latest FBC image for each supported OCP version. It reads only active tags and follows the Quay pagination. The argument is the ART version, which is the operator version (e.g. `0.158`): the FBC tags are `rhosdt-<art version>__v<ocp>__opentelemetry-rhel9-operator`. The floating tag always points to the latest build; tags with a `__g<hash>` suffix are pinned to a specific git commit, but ART re-pushes those as well.
+Use [get-fbc-images.sh](get-fbc-images.sh) to list the latest FBC image for each supported OCP version. It reads only active tags and follows the Quay pagination. The first argument is the ART version, which is the operator version (e.g. `0.158`): the FBC tags are `rhosdt-<art version>__v<ocp>__opentelemetry-rhel9-operator`. The floating tag always points to the latest build; tags with a `__g<hash>` suffix are pinned to a specific git commit, but ART re-pushes those as well.
 ```bash
 ./get-fbc-images.sh 0.158
+```
+An optional second argument is the upstream source commit SHA from `openshift/open-telemetry-opentelemetry-operator`: it selects the FBC images built from that commit via the `__g<short-sha>` pinned tags instead of the latest floating build. 
+```bash
+./get-fbc-images.sh 0.158 5e331f16837f0c7d1990b4611728367490ce1f5f
 ```
 The images are multi-arch. Pin by digest (`image_by_digest`) for CI and for reproducing a result, because only the digest does not change; use the floating tag (`image`) for ad-hoc installs on a cluster.
 
