@@ -21,6 +21,12 @@ The Konflux integration tests must pass on the FBC builds to release. They run i
 ./check-its.sh "$(sed -n "s/^pullspecs: *'\(.*\)'$/\1/p" fbc-images.yaml)" > its.yaml
 ```
 
+By default this lists the latest FBC builds. To get FBCs of a specific commit, pass the upstream source commit SHA from `openshift/open-telemetry-opentelemetry-operator` as the second argument:
+
+```bash
+./get-fbc-images.sh 0.158 <commit-sha> > fbc-images.yaml
+```
+
 To run a scenario again, label its Snapshot: `oc label --overwrite -n art-rhosdt-tenant snapshot <name> test.appstudio.openshift.io/run=<scenario>`. How to read a failed run: "Operating the scenarios" in `/otel-qe-prepare-ci` (`references/konflux-its.md`).
 
 The critical e2e tests (the `e2e-pre-merge` job) already ran on every pull request to the branch. CVE and bug fixes are verified on their issues with `/otel-qe-verify-fixes` when asked.
