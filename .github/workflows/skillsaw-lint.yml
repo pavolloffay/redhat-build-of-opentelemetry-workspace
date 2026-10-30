@@ -1,4 +1,4 @@
-name: Skillsaw Lint
+name: Lint skills
 
 on:
   pull_request:
@@ -7,13 +7,11 @@ on:
     branches: [main]
 
 jobs:
-  skillsaw-lint:
+  lint-skills:
     name: Skillsaw Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run skillsaw lint
-        uses: docker://ghcr.io/stbenjam/skillsaw:latest
-        with:
-          args: lint --strict
+      - name: Run lint
+        run: make lint

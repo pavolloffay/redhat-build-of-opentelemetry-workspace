@@ -1,4 +1,4 @@
-.PHONY: clone-repos pull-repos remove-repos lint lint-fix help
+.PHONY: clone-repos pull-repos remove-repos lint lint-fix codex-skills help
 
 REPOS = \
 	open-telemetry/opentelemetry-collector \
@@ -76,16 +76,28 @@ remove-repos:
 	@echo "Done. Run 'make clone-repos' to re-clone."
 
 lint:
+	@./scripts/validate-codex-skills.sh
 	@docker run --rm -v "$$(pwd):/workspace:Z" $(SKILLSAW_IMAGE) lint --strict $(SKILLSAW_ARGS)
 
 lint-fix:
 	@docker run --rm -v "$$(pwd):/workspace:Z" $(SKILLSAW_IMAGE) fix
+
+# Recreate the .agents/skills symlink that exposes .claude/skills to Codex CLI.
+# Codex discovers skills from .agents/skills, not .claude/skills; the symlink is
+# committed to the repo, so this is only needed on clones where git could not
+# restore it (e.g. Windows without developer mode). Validated by the
+# validate-codex-skills GitHub workflow.
+codex-skills:
+	@mkdir -p .agents
+	@ln -sfn ../.claude/skills .agents/skills
+	@echo "Created .agents/skills -> ../.claude/skills (Codex can now see .claude/skills)"
 
 help:
 	@echo "Available targets:"
 	@echo "  clone-repos    - Clone all workspace repos into this directory"
 	@echo "  pull-repos     - Pull latest in all cloned repos"
 	@echo "  remove-repos   - Delete all cloned repos to start fresh"
-	@echo "  lint           - Run skillsaw linter (Docker)"
+	@echo "  lint           - Validate Codex skills symlink, then run skillsaw linter (Docker)"
 	@echo "  lint-fix       - Auto-fix fixable issues"
+	@echo "  codex-skills   - Recreate the .agents/skills symlink for Codex CLI"
 	@echo "  help           - Show this help"
