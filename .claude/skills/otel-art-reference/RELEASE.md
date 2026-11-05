@@ -49,6 +49,8 @@ The pipeline creates a shipment merge request in [hybrid-platforms/art/ocp-shipm
 Review the MR (e.g. the release notes), approve it and wait until the Gitlab `release-stage` pipeline completes. Restart the individual jobs in case of failure.
 
 ## Run `trigger-prod-release` pipeline
+Once the shipment merge request has label `stage-release-succes`. The release to production registry can be triggered.
+
 Run `trigger-prod-release` pipeline to continue the release to production registry.
 The pipeline takes argument the merge request from the previous step to [hybrid-platforms/art/ocp-shipment-data](https://gitlab.cee.redhat.com/hybrid-platforms/art/ocp-shipment-data/).
 
