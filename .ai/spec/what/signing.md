@@ -158,6 +158,10 @@ Collector processor metrics:
 | `otel_signing_spans_missing_total` | Counter | Spans with no signature attributes |
 | `otel_signing_verification_duration_seconds` | Histogram | Time to verify a signature |
 
+## Relationship to Upstream Signing Processor
+
+The upstream `signingprocessor` in `opentelemetry-collector-contrib` is a separate feature that signs **log records** for audit integrity. It cannot satisfy the non-repudiation requirements here: wrong signal (logs vs traces), wrong signing location (collector vs SDK), incompatible serialization (JCS vs deterministic protobuf), no verification component, and no Sigstore support. See [`signing-upstream-comparison.md`](signing-upstream-comparison.md) for the full comparative analysis.
+
 ## Constraints
 
 1. All signing crypto must be FIPS-compliant (HMAC-SHA256 and ECDSA P-256 use Go standard library; Sigstore uses P-256 curves).
