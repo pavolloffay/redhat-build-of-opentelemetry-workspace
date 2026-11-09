@@ -16,7 +16,7 @@ The pipelines can be run from:
 The recommended way of releasing is via our Gitlab automation in [art-opentelemetry](https://gitlab.cee.redhat.com/distributed-tracing/art-opentelemetry).
 The repository contains a Gitlab pipeline which performs all the release steps below.
 
-The releasee pipeline runs weekly, but it can be executed on-demand when needed.
+The release pipeline runs weekly, but it can be executed on-demand when needed.
 
 ## Manual release
 
