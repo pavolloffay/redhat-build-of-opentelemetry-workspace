@@ -10,9 +10,19 @@ The pipelines can be run from:
 * [ARC OpenShift](https://console-openshift-console.apps.artc2023.pc3z.p1.openshiftapps.com/k8s/ns/art-rhosdt-tenant/tekton.dev~v1~Pipeline)
 * [ART pipelines](https://art-pipelines-ui-art-pipelines-ui.apps.artc2023.pc3z.p1.openshiftapps.com/#/pipelines). This UI allows customizing parameters for rerun.
 
-## Release checks
 
-### Patch and CVE fix release (same `rhosdt-<version>` branch)
+## Automated release
+
+The recommended way of releasing is via our Gitlab automation in [art-opentelemetry](https://gitlab.cee.redhat.com/distributed-tracing/art-opentelemetry).
+The repository contains a Gitlab pipeline which performs all the release steps below.
+
+The release pipeline runs weekly, but it can be executed on-demand when needed.
+
+## Manual release
+
+### Release checks
+
+#### Patch and CVE fix release (same `rhosdt-<version>` branch)
 
 The Konflux integration tests must pass on the FBC builds to release. They run in the application `fbc-rhosdt-<art version with dashes>` of `art-rhosdt-tenant` (scenarios in `konflux-release-data`, pipelines in `distributed-tracing-qe`).
 
@@ -31,11 +41,11 @@ To run a scenario again, label its Snapshot: `oc label --overwrite -n art-rhosdt
 
 The critical e2e tests (the `e2e-pre-merge` job) already ran on every pull request to the branch. CVE and bug fixes are verified on their issues with `/otel-qe-verify-fixes` when asked.
 
-### Major or minor release (a new `rhosdt-<version>` branch and ART group)
+#### Major or minor release (a new `rhosdt-<version>` branch and ART group)
 
 The checks of a patch release, and the checklist of `/otel-qe-release-testing` with the version (e.g. `0.159`).
 
-## Run `release-from-fbc` pipeline
+### Run `release-from-fbc` pipeline
 Create the [pipeline CR](./release-from-fbc.yaml) or via [UI](https://console-openshift-console.apps.artc2023.pc3z.p1.openshiftapps.com/k8s/ns/art-rhosdt-tenant/tekton.dev~v1~Pipeline/release-from-fbc), replacing:
 * `<GROUP>` — e.g. `rhosdt-0.158` (the ocp-build-data group branch)
 * `<ASSEMBLY_VERSION>` — e.g. `0.158.0`
@@ -48,7 +58,7 @@ The pipeline creates a shipment merge request in [hybrid-platforms/art/ocp-shipm
 
 Review the MR (e.g. the release notes), approve it and wait until the Gitlab `release-stage` pipeline completes. Restart the individual jobs in case of failure.
 
-## Run `trigger-prod-release` pipeline
+### Run `trigger-prod-release` pipeline
 Once the shipment merge request has label `stage-release-succes`. The release to production registry can be triggered.
 
 Run `trigger-prod-release` pipeline to continue the release to production registry.
