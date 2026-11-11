@@ -237,7 +237,7 @@ Moving signing from the SDK to the collector provides several advantages:
 
 ## Relationship to Upstream Signing Processor
 
-The upstream `signingprocessor` in `opentelemetry-collector-contrib` signs **log records** for audit integrity using JCS (RFC 8785) canonical JSON serialization. Our processor signs **trace spans** using deterministic protobuf serialization. The two features are complementary — one signs audit logs, the other signs traces — but use incompatible serialization formats and different attribute namespaces (`audit.integrity.*` vs `otel.signing.*`). See [`signing-upstream-comparison.md`](signing-upstream-comparison.md) for the full comparative analysis.
+The upstream [`signingprocessor`](https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/processor/signingprocessor) and [`verifyprocessor`](https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/processor/verifyprocessor) in `opentelemetry-collector-contrib` sign and verify **log records** for audit integrity using JCS (RFC 8785) canonical JSON serialization. Our processors sign and verify **trace spans** using deterministic protobuf serialization. The two feature sets are complementary — one handles audit logs, the other handles traces — but use incompatible serialization formats and different attribute namespaces (`audit.integrity.*` vs `otel.signing.*`). See [`signing-upstream-comparison.md`](signing-upstream-comparison.md) for the full comparative analysis.
 
 ## Constraints
 
