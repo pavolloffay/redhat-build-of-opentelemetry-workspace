@@ -13,6 +13,7 @@ Cross-repo workspace for Red Hat build of OpenTelemetry — shared specs, routin
 | [open-telemetry-opentelemetry-operator](https://github.com/openshift/open-telemetry-opentelemetry-operator) | Product/downstream fork of the operator, holds `rhosdt-x.y`. Downstream productization repository |
 | [ocp-build-data](https://github.com/openshift-eng/ocp-build-data)                                   | ART configuration for product builds, uses `rhosdt-x.y` branches which match upstream operator version |
 | [konflux-release-data](https://gitlab.cee.redhat.com/releng/konflux-release-data)                    | Konflux configuration repository in `tenants-config/cluster/kflux-ocp-p01/tenants/art-rhosdt-tenant`, including the integration test scenarios |
+| [art-opentelemetry](https://gitlab.cee.redhat.com/distributed-tracing/art-opentelemetry)             | ART release automation for OpenTelemetry                            |
 | [openshift-docs](https://github.com/openshift/openshift-docs/tree/standalone-otel-docs-main)         | Documentation for the Red Hat build of OpenTelemetry                  |
 | [distributed-tracing-console-plugin](https://github.com/openshift/distributed-tracing-console-plugin) | OpenShift console plugin for distributed tracing                      |
 | [logging-view-plugin](https://github.com/openshift/logging-view-plugin)                              | OpenShift console plugin for logging view                             |

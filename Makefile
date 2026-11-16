@@ -15,7 +15,8 @@ REPOS = \
 	openshift-eng/ocp-build-data
 
 GITLAB_REPOS = \
-	git@gitlab.cee.redhat.com:releng/konflux-release-data.git
+	git@gitlab.cee.redhat.com:releng/konflux-release-data.git \
+	git@gitlab.cee.redhat.com:distributed-tracing/art-opentelemetry.git
 
 REPO_DIRS = $(notdir $(REPOS)) $(foreach r,$(GITLAB_REPOS),$(basename $(notdir $(r))))
 

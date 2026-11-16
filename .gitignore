@@ -13,6 +13,7 @@ release/
 konflux-release-data/
 ocp-build-data/
 open-telemetry-opentelemetry-operator/
+art-opentelemetry/
 
 # No longer part of the workspace; ignored so that old local clones are not committed
 midstream-opentelemetry-operator/
