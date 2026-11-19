@@ -75,7 +75,11 @@ The **headers setter extension** (`headerssetter`) can set outbound headers on e
 
 **Example — forwarding a tenant ID claim as `X-Scope-OrgID` to a multi-tenant backend:**
 
-This example assumes the `k8s_token_auth` extension from Approach 1 (Option B) exists — it does not exist yet. The auth extension validates the bearer token and exposes identity (namespace, service account) as auth attributes. The resource processor stamps the namespace into a custom metadata key before batching, and the headers setter reads it via `from_context` on the exporter side. Using `from_context` (metadata) instead of `from_attribute` (auth) is necessary because `client.Info.Auth` is lost during batching (see Context Lifecycle above).
+### Identity Forwarding and Token Passthrough Example
+
+This example combines both patterns: forwarding a **derived tenant header** (`X-Scope-OrgID`) and passing through the **raw bearer token** so the backend can perform its own authorization. This matches the RHOAI use case — the collector authenticates and routes by namespace, while MLflow receives the original token for its own SubjectAccessReview.
+
+This example assumes the `k8s_token_auth` extension from Approach 1 (Option B) exists — it does not exist yet. When `include_metadata: true` is set on the receiver, ALL incoming headers (including `Authorization`) are stored in `client.Info.Metadata`. The headers setter extension forwards them using `from_context` (which reads from metadata). This works for both gRPC ([`configgrpc.go`](https://github.com/open-telemetry/opentelemetry-collector/blob/main/config/configgrpc/configgrpc.go) copies all gRPC metadata) and HTTP ([`confighttp/clientinfohandler.go`](https://github.com/open-telemetry/opentelemetry-collector/blob/main/config/confighttp/clientinfohandler.go) clones all HTTP headers) receivers.
 
 ```yaml
 receivers:
@@ -92,12 +96,15 @@ receivers:
 
 extensions:
   k8s_token_auth:
-    audiences: [otel-gateway]  # optional; defaults to the cluster's API server audience
+    audiences: [shared-audience]  # optional; must be accepted by BOTH collector and backend for passthrough
   headers_setter:
     headers:
       - action: upsert
-        key: X-Scope-OrgID
-        from_context: x-tenant-id
+        key: X-Scope-OrgID              # derived tenant header for multi-tenant backends (Tempo, Mimir, Loki)
+        from_attribute: namespace        # reads from client.Info.Auth (only works without batching)
+      - action: upsert
+        key: Authorization              # raw bearer token passthrough for backend authorization (e.g., MLflow SSAR)
+        from_context: authorization      # reads from client.Info.Metadata
 
 processors:
   resource/stamp-identity:
@@ -105,61 +112,13 @@ processors:
       - key: sender.namespace
         from_context: "auth.namespace"
         action: upsert
+      - key: sender.service_account
+        from_context: "auth.service_account"
+        action: upsert
 
 exporters:
-  otlp/tempo:
-    endpoint: tempo:4317
-    auth:
-      authenticator: headers_setter
-    sending_queue:                        # replaces the deprecated batchprocessor (QueueBatchConfig)
-      batch:                              # batching config within the sending queue
-        partition:                        # partitioning controls how requests are grouped into batches
-          metadata_keys: [x-tenant-id]    # requests with different x-tenant-id values get separate batches
-
-service:
-  extensions: [k8s_token_auth, headers_setter]
-  pipelines:
-    traces:
-      receivers: [otlp]
-      processors: [resource/stamp-identity]
-      exporters: [otlp/tempo]
-```
-
-Multi-tenant backends like Tempo, Mimir, and Loki use `X-Scope-OrgID` for tenant isolation. This example requires senders to pass a `x-tenant-id` metadata header alongside their SA token. An alternative is to use `from_attribute: namespace` on the headers setter — this reads directly from `client.Info.Auth` and avoids the extra metadata key, but only works in pipelines without batching.
-
-The headers setter extension is in the Red Hat distro manifest (`headerssetterextension v0.158.0`). Not supported — present in source but not documented (see `what/collector.md`).
-
-### Token Passthrough to Backends
-
-Some backends need the sender's original bearer token to perform their own authorization (e.g., MLflow performing a SubjectAccessReview with the sender's SA token). The collector supports this via metadata passthrough.
-
-When `include_metadata: true` is set on the receiver, ALL incoming headers (including `Authorization`) are stored in `client.Info.Metadata`. The headers setter extension can then forward the raw token to the backend using `from_context` (which reads from metadata). This works for both gRPC ([`configgrpc.go`](https://github.com/open-telemetry/opentelemetry-collector/blob/main/config/configgrpc/configgrpc.go) copies all gRPC metadata) and HTTP ([`confighttp/clientinfohandler.go`](https://github.com/open-telemetry/opentelemetry-collector/blob/main/config/confighttp/clientinfohandler.go) clones all HTTP headers) receivers.
-
-```yaml
-receivers:
-  otlp:
-    protocols:
-      grpc:
-        include_metadata: true
-        auth:
-          authenticator: k8s_token_auth
-      http:
-        include_metadata: true
-        auth:
-          authenticator: k8s_token_auth
-
-extensions:
-  k8s_token_auth:
-    audiences: [shared-audience]  # must be accepted by BOTH collector and backend
-  headers_setter:
-    headers:
-      - action: upsert
-        key: Authorization
-        from_context: authorization
-
-exporters:
-  otlp/mlflow:
-    endpoint: mlflow:4317
+  otlphttp/mlflow:
+    endpoint: http://mlflow:5000/v1/traces   # MLflow OTLP/HTTP endpoint (since v3.6.0, OTLP/gRPC not supported)
     auth:
       authenticator: headers_setter
     sending_queue:                          # replaces the deprecated batchprocessor (QueueBatchConfig)
@@ -173,12 +132,19 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      exporters: [otlp/mlflow]
+      processors: [resource/stamp-identity]
+      exporters: [otlphttp/mlflow]
 ```
 
-**Batching caveat:** `metadata_keys` preserves specified metadata keys across batching but creates per-token batching buckets — each unique token gets its own batch. This preserves correctness but reduces batching efficiency (fewer items per batch). The config above uses exporter-level batching (`sending_queue::batch`) which replaces the deprecated `batchprocessor` (see migration RFC: [`docs/rfcs/batching-migration.md`](https://github.com/open-telemetry/opentelemetry-collector/blob/main/docs/rfcs/batching-migration.md)).
+**Two forwarding mechanisms in one config:**
+- **`from_attribute: namespace`** — reads from `client.Info.Auth` (set by the auth extension). Sets `X-Scope-OrgID` for multi-tenant backends. Lost during batching — only works if the exporter does not batch, or if batching is disabled.
+- **`from_context: authorization`** — reads from `client.Info.Metadata` (raw request headers). Passes through the original bearer token. Survives batching when `metadata_keys` includes `authorization`.
+
+**Batching caveat:** `metadata_keys` preserves specified metadata keys across batching but creates per-token batching buckets — each unique token gets its own batch. This preserves correctness but reduces batching efficiency. The `from_attribute: namespace` header will be lost after batching (see Context Lifecycle above); for pipelines with batching, use `from_context` with a metadata key instead. The config above uses exporter-level batching (`sending_queue::batch`) which replaces the deprecated `batchprocessor` (see migration RFC: [`docs/rfcs/batching-migration.md`](https://github.com/open-telemetry/opentelemetry-collector/blob/main/docs/rfcs/batching-migration.md)).
 
 **Audience constraint for passthrough:** When a backend validates the forwarded token via its own TokenReview, the token's audience must match what the backend expects. If the sender projected the token with a collector-specific audience (e.g., `otel-gateway`), the backend will reject it. The audience must be shared between collector and backend, or the backend must accept the collector's audience. See the audience discussion in Approach 1 below.
+
+The headers setter extension is in the Red Hat distro manifest (`headerssetterextension v0.158.0`). Not supported — present in source but not documented (see `what/collector.md`).
 
 ### Routing Connector
 
@@ -224,7 +190,6 @@ The routing connector (TP in the Red Hat distro) routes telemetry to different p
 | **Kubernetes SA token authentication** | The OIDC extension **cannot** validate K8s SA tokens on OpenShift out of the box (see below). A new TokenReview auth extension is needed. | **High** — K8s workloads are the primary sender type on OpenShift |
 | **Authorization enforcement** | Auth extensions authenticate (who?) but nothing authorizes (may this sender write here?). The routing connector provides implicit authorization (route or drop) via its static routing table — this is sufficient for the use case (see Authorization section). | **Medium** — implicit authorization via routing is acceptable |
 | **Rejection signaling** | When the routing connector has no matching route, data goes to `default_pipelines` or is dropped silently. There is no mechanism to send an error response to the sender explaining why data was rejected. | **Medium** — operators need visibility; senders need feedback |
-| **End-to-end identity standard** | No standard format for passing verified identity between collector and backends. Each backend has its own header convention. | **Low** — can be handled per-backend with headers setter |
 
 ## Approaches
 
