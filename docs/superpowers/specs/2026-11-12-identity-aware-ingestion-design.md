@@ -74,11 +74,11 @@ The Jamstah extension's SAR step rejects unauthorized senders at the auth layer.
 | RHOAI Need | Collector Mechanism |
 |---|---|
 | Identify calling agent/service | K8s SA token authentication |
-| Route traces to per-experiment MLflow | Routing connector with identity-based OTTL conditions |
+| Route traces to per-namespace MLflow | Routing connector with identity-based OTTL conditions |
 | Prevent cross-tenant trace writes | Implicit authorization via routing |
 | Correlate agent traces with MaaS traces | Verified identity stamped into resource attributes, forwarded via headers |
 
-RHOAI-specific gaps: MLflow experiment targeting needs a custom exporter or OTLP-to-MLflow bridge (out of scope for the collector). The `TraceRoutingRule` CRD in RHAISTRAT-2925 is an RHOAI-specific abstraction over the collector's routing primitives.
+**RHOAI-specific notes:** Authorization operates at the **namespace level** via K8s RBAC; each MLflow namespace contains multiple experiments, and the experiment is a passthrough header. MLflow experiment targeting needs a custom exporter or OTLP-to-MLflow bridge maintained by the RHOAI team (out of scope for the collector). The `TraceRoutingRule` CRD in RHAISTRAT-2925 is an RHOAI-specific abstraction over the collector's routing primitives. **Token passthrough is required** — MLflow needs the sender's SA token to perform its own SubjectAccessReview. The collector forwards the token via the headers setter extension's metadata passthrough (`from_context: authorization` with `include_metadata: true` on the receiver). This constrains the audience choice — the token's audience must be acceptable to both the collector and MLflow.
 
 ## Components Needed
 
@@ -105,7 +105,7 @@ RHOAI-specific gaps: MLflow experiment targeting needs a custom exporter or OTLP
 1. **Upstream path for `k8ssaauthextension`?** Collaborate with the author (James Hewitt, IBM) and propose for contrib? Related upstream discussion: [#48895](https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/48895).
 2. **What support level for identity-aware ingestion?** OIDC and routing connector are both TP. GA requires promotion.
 3. **Interaction with signing spec (TRACING-6499)?** Signing proves origin, auth proves submission rights. Complementary — should they share identity primitives?
-4. **TokenReview caching strategy.** Cache TTL, expected QPS, K8s API server load.
+4. **TokenReview caching strategy.** The cache TTL should be configurable — matching token validity (typically 1h) creates a gap with typical caching policies (2–5 min). A short default TTL (e.g., 2–5 min) with a configurable override is recommended.
 
 ## References
 
