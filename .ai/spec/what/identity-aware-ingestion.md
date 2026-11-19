@@ -193,75 +193,52 @@ The routing connector (TP in the Red Hat distro) routes telemetry to different p
 
 ## Approaches
 
-### Approach 1: Kubernetes Service Account Token Authentication
+The problem has two layers: **authentication** (verify who is sending) and **authorization** (enforce what they may send to). This section covers both.
+
+### Authentication: Validating K8s Service Account Tokens
 
 Kubernetes service account tokens are JWTs signed by the cluster's service account issuer. Three options for validating them at the collector:
 
-#### Option A: OIDC Auth Extension Pointed at K8s Issuer — Does Not Work on OpenShift
+#### Option A: OIDC Auth Extension — Does Not Work on OpenShift
 
-The OIDC auth extension fetches `{issuer_url}/.well-known/openid-configuration` at startup using a plain HTTP client with no bearer token. On Kubernetes/OpenShift, the API server serves this endpoint but **requires authentication** — it is bound to `system:serviceaccounts` via the `system:service-account-issuer-discovery` ClusterRole. The extension's unauthenticated request fails with HTTP 401.
+The OIDC auth extension fetches `{issuer_url}/.well-known/openid-configuration` at startup using a plain HTTP client with no bearer token. On OpenShift, the API server **requires authentication** for this endpoint — the extension gets HTTP 401.
 
 **Additional complications:**
-- **Issuer URL varies by cluster type.** Standard OpenShift uses `iss: https://kubernetes.default.svc`. AWS STS OpenShift uses an S3 bucket URL. Azure WIF ARO uses `https://{region}.oic.aro.azure.net/{tenant}/{uuid}`. The extension config must match the cluster's actual issuer, making a generic config impossible.
-- **CA cert pool is exclusive.** The OIDC extension creates a new empty cert pool with only the issuer CA — system roots are not included. This works for `kubernetes.default.svc` (the mounted CA covers it) but may break if the JWKS URI points elsewhere.
-- **Audience must be projected.** Default SA tokens use `aud: ["https://kubernetes.default.svc"]`. Senders must project tokens with a custom audience via a `serviceAccountToken` volume, and the extension must be configured with that audience.
+- **Issuer URL varies by cluster type.** Standard OpenShift uses `iss: https://kubernetes.default.svc`. AWS STS uses an S3 bucket URL. Azure WIF ARO uses `https://{region}.oic.aro.azure.net/{tenant}/{uuid}`.
+- **CA cert pool is exclusive.** The OIDC extension creates a new empty cert pool with only the issuer CA — system roots are not included.
+- **Audience must be projected.** Default SA tokens use `aud: ["https://kubernetes.default.svc"]`. Senders must project tokens with a custom audience.
 
-**Workaround — `public_keys_file`:** The extension supports loading a JWKS file directly via the `public_keys_file` option, bypassing OIDC discovery. The file is watched and reloaded on changes. The cluster JWKS could be exported to a ConfigMap/Secret and mounted. Key rotation is rare on OpenShift, so this is operationally viable but adds a distribution mechanism (e.g., CronJob to refresh the JWKS).
+**Workaround — `public_keys_file`:** Load a JWKS file directly, bypassing discovery. Operationally viable but adds a distribution mechanism (e.g., CronJob to refresh the JWKS).
 
-**Verdict:** The OIDC extension does not work out of the box for K8s SA tokens on OpenShift. The `public_keys_file` workaround is fragile and operationally complex.
+**Verdict:** Does not work out of the box for K8s SA tokens on OpenShift. The workaround is fragile.
 
-#### Option B1: K8s SA Auth Extension — TokenReview Only (Authentication Only)
+#### Option B: K8s SA Auth Extension (TokenReview)
 
-A K8s SA auth extension that performs only TokenReview: it validates the bearer token, extracts identity (namespace, service account name, groups), and exposes them as auth attributes. Authorization is handled downstream by the routing connector — see Approach 2 Option A.
+A dedicated extension that validates the bearer token via the K8s TokenReview API, extracts identity (namespace, service account name, groups), and exposes them as auth attributes. This does not exist upstream yet — an external implementation exists: [`github.com/Jamstah/k8ssaauthextension`](https://github.com/Jamstah/k8ssaauthextension) by James Hewitt (IBM).
 
 ```yaml
 extensions:
   k8s_token_auth:
-    audiences: [opentelemetry-collector]
+    audiences: [opentelemetry-collector]  # optional; defaults to cluster API server audience
 ```
 
-**Pros:** Clean separation of concerns — authentication in the extension, authorization in the pipeline. The extension is simpler (one API call, easier to cache). Authorization rules are visible in the collector config alongside the routing topology. No K8s RBAC resources to manage for telemetry-specific permissions. Works with the existing routing connector (no new components beyond the extension).
-**Cons:** Authorization is implicit (route or drop, no error to sender). Adding/removing tenants requires collector config changes. The routing table and auth are in different places (extension config vs connector config), which can drift.
+The extension can optionally include a **SubjectAccessReview** step for authorization at the auth layer — see Authorization section below.
 
-#### Option B2: K8s SA Auth Extension — TokenReview + SubjectAccessReview (Authentication + Authorization)
+**Current status:** Development stability, 6 commits, not proposed for `opentelemetry-collector-contrib`. The related core collector issue [#6987](https://github.com/open-telemetry/opentelemetry-collector/issues/6987) (closed) was about client-side K8s SA auth, not server-side.
 
-An external implementation exists: [`github.com/Jamstah/k8ssaauthextension`](https://github.com/Jamstah/k8ssaauthextension) by James Hewitt (IBM). It performs two-step server-side auth:
+**Gaps:**
+- Auth attributes exposed via `client.Info.Auth` are not documented.
+- No caching of TokenReview results.
 
-1. **TokenReview API** — validates the bearer token is a legitimate K8s SA token and extracts identity.
-2. **SubjectAccessReview API** — checks if the authenticated SA has RBAC permission to perform a configured action (e.g., `verb: export` on `resource: telemetry` in `group: telemetry.opentelemetry.io`).
+**Path forward:** Evaluate and improve the Jamstah extension (caching, auth attribute exposure), propose for `opentelemetry-collector-contrib`. The `k8sattributesprocessor` provides precedent for K8s-specific components in contrib.
 
-```yaml
-extensions:
-  k8s_sa_auth:
-    audiences: [opentelemetry-collector]
-    resource_attributes:
-      group: telemetry.opentelemetry.io
-      resource: telemetry
-      verb: export
-```
-
-Authorization is managed via standard Kubernetes RBAC: an admin creates a Role granting `export` on `telemetry` resources and binds it to the sender's service account. Senders without the binding are rejected at the auth layer before data enters the pipeline.
-
-**Pros:** True authorization with rejection at the auth layer (sender gets an error, not a silent drop). Authorization managed via standard K8s RBAC — familiar to cluster admins, auditable via K8s audit logs. Adding a sender is a RoleBinding, not a collector config change.
-**Cons:** SubjectAccessReview is a second synchronous API call per request (must be cached). Authorization is coarse-grained — SAR checks a single resource/verb, not per-destination policies. The routing table still needs to map identity → pipeline, so authorization (SAR) and routing (connector) are in different systems. More complex to reason about: two authorization models (SAR gates entry, routing directs traffic).
-
-#### Shared Context for B1 and B2
-
-**Current status of Jamstah extension:** Development stability, 6 commits, not yet proposed for inclusion in `opentelemetry-collector-contrib`. No existing issue or PR in contrib requests this component. The related core collector issue [#6987](https://github.com/open-telemetry/opentelemetry-collector/issues/6987) (closed) was about client-side K8s SA auth, not server-side.
-
-**Gaps in the existing implementation:**
-- Auth attributes exposed via `client.Info.Auth` are not documented — unclear whether `namespace`, `service_account`, `subject` etc. are available for downstream routing/processing.
-- No caching of TokenReview or SubjectAccessReview results — scalability concern under high request volume.
-
-**Path forward:** Evaluate the Jamstah extension, contribute improvements (caching, auth attribute exposure), and propose it for inclusion in `opentelemetry-collector-contrib`. A TokenReview-only variant (B1) could be a simpler first contribution. The `k8sattributesprocessor` provides precedent for K8s-specific components in contrib.
-
-**Upstream discussion:** Issue [#48895](https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/48895) ("Support Multitenant Kubernetes Self-Service") discusses dynamic multi-tenant routing at scale — the closest upstream conversation to this use case.
+**Upstream discussion:** Issue [#48895](https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/48895) ("Support Multitenant Kubernetes Self-Service") — the closest upstream conversation to this use case.
 
 #### Option C: Auth Proxy Sidecar (kube-rbac-proxy)
 
-Deploy `kube-rbac-proxy` as a sidecar in front of the collector. The proxy validates SA tokens via TokenReview, optionally checks SubjectAccessReview, and forwards authenticated identity as HTTP headers to the collector.
+Deploy `kube-rbac-proxy` as a sidecar in front of the collector. The proxy validates SA tokens via TokenReview, optionally checks SubjectAccessReview, and forwards authenticated identity as HTTP headers.
 
-**Identity propagation:** kube-rbac-proxy must be started with `--auth-header-fields-enabled=true`. It then sets `x-remote-user` (e.g. `system:serviceaccount:ns:name`) and `x-remote-groups` on proxied requests. The collector reads these via `include_metadata: true` on the OTLP receiver:
+kube-rbac-proxy must be started with `--auth-header-fields-enabled=true`. It then sets `x-remote-user` (e.g. `system:serviceaccount:ns:name`) and `x-remote-groups` on proxied requests. The collector reads these via `include_metadata: true`:
 
 ```yaml
 receivers:
@@ -275,28 +252,24 @@ receivers:
         include_metadata: true
 ```
 
-The routing connector can then route on `otelcol.client.metadata["x-remote-user"]`, and the resource processor can stamp identity via `from_context: "metadata.x-remote-user"`. gRPC is supported via `--upstream-force-h2c`.
+The routing connector routes on `otelcol.client.metadata["x-remote-user"]`. gRPC is supported via `--upstream-force-h2c`.
 
-**Security requirement:** The identity headers are untrusted client-supplied metadata from the collector's perspective. The collector's receiver must bind to `localhost` so only the sidecar can reach it, and a NetworkPolicy must prevent any other pod from bypassing the proxy. Without this, any sender can set `x-remote-user` and impersonate any identity.
+**Security requirement:** The identity headers are untrusted metadata from the collector's perspective. The receiver must bind to `localhost` and a NetworkPolicy must prevent pods from bypassing the proxy. Without this, any sender can set `x-remote-user` and impersonate any identity.
 
-**Pros:** Well-established pattern on OpenShift. No collector code changes. kube-rbac-proxy already supports TokenReview + SubjectAccessReview. Works for both HTTP and gRPC. Can serve as an interim solution while the `k8ssaauthextension` matures.
-**Cons:** Identity is carried as metadata headers, not `client.Info.Auth` — requires the localhost-binding + NetworkPolicy security model. Adds a sidecar container and network hop. The operator would need to inject the sidecar via `additionalContainers`.
+**Pros:** Well-established OpenShift pattern. No collector code changes. Works for both HTTP and gRPC. Interim solution while the K8s SA auth extension matures.
+**Cons:** Identity is metadata headers, not `client.Info.Auth`. Adds a sidecar and network hop. The operator would need to inject the sidecar via `additionalContainers`.
 
-#### Recommendation
+#### Authentication Recommendation
 
-**Option B1** (TokenReview-only + routing connector authorization) is the simplest path — it requires only a single-purpose auth extension and leverages the existing routing connector for authorization. It's the easiest to contribute upstream and covers the primary use case.
+**Option B** (TokenReview extension) is the target — simplest, cleanest integration. **Option C** (kube-rbac-proxy) is the interim solution. **Option A** (OIDC) does not work on OpenShift.
 
-**Option B2** (TokenReview + SubjectAccessReview) adds K8s RBAC-based authorization. It's more powerful but also more complex — the Jamstah extension already implements this. Worth evaluating if K8s-native authorization management is important to the stakeholders.
+### Authorization: Enforcing What Senders May Send To
 
-**Option C** (kube-rbac-proxy sidecar) is a viable interim solution while the auth extension matures. **Option A** (OIDC extension) does not work on OpenShift without fragile workarounds.
-
-### Approach 2: Authorization
-
-Two authorization models are possible:
+Authentication tells us _who_ is sending. Authorization enforces _where_ they can send. Two models:
 
 #### Option A: Implicit Authorization via Routing Connector
 
-The routing connector's OTTL conditions act as an implicit authorization layer: authenticated senders are routed to their allowed pipelines, and unmatched senders go to `default_pipelines` which routes to a reject pipeline.
+The routing connector's OTTL conditions act as an implicit authorization layer: authenticated senders are routed to their allowed pipelines, and unmatched senders go to a reject pipeline.
 
 ```yaml
 connectors:
@@ -309,40 +282,34 @@ connectors:
     default_pipelines: [traces/reject]
 ```
 
-**How it works:** Each routing rule is an allow rule (identity X → pipeline Y). Per-tenant pipeline isolation means a sender cannot write to another tenant's backend. Unmatched senders go to `traces/reject`. Static routing table in the collector config — adding a tenant requires a config change and collector reload, acceptable for the expected tenant counts.
+Each routing rule is an allow rule (identity → pipeline). Per-tenant pipeline isolation prevents cross-tenant writes. Static routing table — adding a tenant requires a config change and collector reload, acceptable for the expected tenant counts.
 
-**Limitations:** The sender receives a success response even when data is dropped. No fine-grained policies per signal type (though separate routing connectors per signal are possible). Static table requires config changes for tenant additions.
+**Limitation:** The sender receives a success response even when data is dropped (silent drop, no error).
 
-#### Option B: Authorization via Kubernetes RBAC (SubjectAccessReview)
+#### Option B: Explicit Authorization via K8s RBAC (SubjectAccessReview)
 
-The Jamstah `k8ssaauthextension` (Approach 1 Option B) includes a SubjectAccessReview step that checks whether the authenticated SA has K8s RBAC permission to perform a configured action. This means authorization can be managed via standard Kubernetes Roles/ClusterRoles:
+The K8s SA auth extension (Authentication Option B) can include a SubjectAccessReview step that rejects unauthorized senders _before_ data enters the pipeline:
 
 ```yaml
-# In the auth extension config:
 extensions:
   k8s_sa_auth:
+    audiences: [opentelemetry-collector]
     resource_attributes:
       group: telemetry.opentelemetry.io
       resource: telemetry
       verb: export
-
-# Then a K8s Role grants access:
-# kind: ClusterRole
-# rules:
-#   - apiGroups: [telemetry.opentelemetry.io]
-#     resources: [telemetry]
-#     verbs: [export]
 ```
 
-**How it works:** The extension rejects senders that lack the RBAC permission _before_ data enters the pipeline. Authorization is managed via standard K8s RBAC (familiar to cluster admins, auditable, no collector config changes needed to add/remove senders). Routing then maps the authenticated identity to the correct pipeline.
+Authorization is managed via standard K8s RBAC — an admin creates a Role granting `export` on `telemetry` resources and binds it to the sender's SA. Senders without the binding get an error.
 
-**Pros over Option A:** True authorization with rejection at the auth layer (not silent drop). Managed via K8s RBAC — adding a sender is a RoleBinding, not a collector config change. Auditable via K8s audit logs.
+**Pros over Option A:** True rejection (sender gets an error, not silent drop). Managed via K8s RBAC — adding a sender is a RoleBinding, not a collector config change. Auditable via K8s audit logs.
+**Cons:** Coarse-grained — SAR checks a single resource/verb, not per-destination policies. Routing still needs to map identity → pipeline. Adds a synchronous API call per request (cacheable).
 
-**Cons:** Coarse-grained — SAR checks a single resource/verb, not per-destination policies. The routing table still needs to map identity → pipeline. Adds a synchronous API call per request (cacheable).
+**Both can coexist:** SAR gates entry (reject unauthorized senders with an error), routing directs traffic to the correct pipeline. SAR answers "may this sender use the collector at all?" while routing answers "which backend does this sender's data go to?"
 
-#### Recommendation
+#### Authorization Recommendation
 
-**Option B** (SAR-based authorization) is preferable if the `k8ssaauthextension` is adopted, since it provides true rejection and uses standard K8s RBAC. **Option A** (routing connector) is the fallback and works today without new components. Both can coexist: SAR gates entry, routing directs traffic.
+**Option B** (SAR) is preferable if the K8s SA auth extension is adopted — it provides true rejection and uses standard K8s RBAC. **Option A** (routing connector) works today without new components and is sufficient on its own for expected tenant counts.
 
 **Note on Authorino/Kuadrant:** RHAISTRAT-2925 mentions Authorino/Kuadrant, but these sit in front of the **MaaS gateway** (not the collector). Authorino authenticates callers at the MaaS API layer and forwards identity as HTTP headers. The collector receives traces from the MaaS payload processor after authentication has already happened.
 
