@@ -195,7 +195,7 @@ The routing connector (TP in the Red Hat distro) routes telemetry to different p
 
 | Context field | What it holds | Preserved after batching? |
 |---|---|---|
-| `client.Info.Metadata` | Request headers (HTTP) or metadata (gRPC), populated when `include_metadata: true`. E.g., `authorization`, `content-type`, custom headers. | Only keys listed in `metadata_keys` (both old and new batcher) |
+| `client.Info.Metadata` | Request headers (HTTP) or metadata (gRPC), populated when `include_metadata: true`. E.g., `authorization`, `content-type`, custom headers. | Only entries whose key name is in `metadata_keys` are preserved (both old and new batcher); all other metadata entries are dropped |
 | `client.Info.Auth` | Structured identity from an auth extension: claims, subject, groups, raw token. Set by extensions like OIDC (`subject`, `membership`, `claims.*`, `raw`) or the proposed K8s SA auth (`namespace`, `service_account`). | **Never** — lost in all batching scenarios, including persistent queue (not serialized) |
 | `client.Info.Addr` | The client's network address (`net.Addr`). | Lost in memory batching; preserved in persistent queue serialization |
 
@@ -473,7 +473,7 @@ service:
 - Routing uses the `namespace` auth attribute — each namespace maps to a tenant pipeline.
 - Each tenant pipeline has its own batch processor and exporter with tenant-specific headers.
 - Unrecognized senders go to `traces/reject` — data is logged and dropped.
-- Senders must project their SA token with a configured audience via a `serviceAccountToken` volume. The audience is a deployment choice:
+- Senders can project their SA token with an explicit audience via a `serviceAccountToken` volume (optional — if omitted, the token uses the cluster's default audience, typically `https://kubernetes.default.svc`). When set, the audience is a deployment choice:
   - **Collector-terminated:** Use a collector-specific audience (e.g., `otel-gateway`). The token is validated and consumed at the collector; identity is forwarded as derived attributes (e.g., `X-Scope-OrgID`). Suitable when backends trust the collector's identity assertions.
   - **Token passthrough:** Use the backend's expected audience (or a shared audience accepted by both collector and backend). The original token is forwarded via the headers setter extension so backends can perform their own TokenReview/SubjectAccessReview. Required when backends (e.g., MLflow) need the sender's token for their own authorization.
 - The collector's service account needs a ClusterRole with `create` on `tokenreviews` in `authentication.k8s.io`.
@@ -491,7 +491,7 @@ The RHOAI use case (RHAIRFE-3630, RHAISTRAT-2925) wants identity-based OTel trac
 
 **RHOAI-specific notes beyond OBSDA-1512:**
 - Authorization operates at the **namespace level** via K8s RBAC. Each MLflow namespace (workspace) contains multiple experiments. Routing is per-namespace; the experiment is a passthrough header that the backend resolves.
-- MLflow experiment targeting requires a custom exporter or OTLP-to-MLflow bridge maintained by the RHOAI team — this is out of scope for the collector and is an RHOAI/odh-observability concern.
+- MLflow (since v3.6.0) exposes an OTLP/HTTP endpoint at `/v1/traces` — a standard `otlphttp` exporter works directly, no custom bridge needed. The experiment is targeted via the `x-mlflow-experiment-id` header, which the headers setter extension can set per-pipeline. OTLP/gRPC is not supported by MLflow.
 - The RHAISTRAT-2925 strategy's `TraceRoutingRule` CRD is an RHOAI-specific abstraction, not a collector/operator feature. OBSDA-1512 provides the underlying collector primitives that such a CRD would configure.
 - **Token passthrough is required:** MLflow needs the sender's original SA token to perform its own SubjectAccessReview. The collector must forward the token via the headers setter extension's metadata passthrough (see "Token Passthrough to Backends" section above). This constrains the audience choice — the token's audience must be acceptable to both the collector and MLflow.
 
@@ -533,11 +533,20 @@ The RHOAI use case (RHAIRFE-3630, RHAISTRAT-2925) wants identity-based OTel trac
 
 4. **How does this interact with the signing spec (TRACING-6499)?** Signing provides non-repudiation — proof that telemetry was produced by a specific entity. Identity-aware ingestion provides sender authentication at the gateway. These are complementary: signing proves origin, auth proves the sender is allowed to submit. Should they share identity primitives?
 
-5. **TokenReview caching strategy.** TokenReview is a synchronous API call. The cache TTL should be **configurable** — matching token validity (typically 1h) creates a gap with typical caching policies (2–5 min). A short default TTL (e.g., 2–5 min) with a configurable override balances security (revocation detection) and API server load. What is the expected QPS and can the K8s API server handle it?
+5. **TokenReview caching strategy.** TokenReview is a synchronous per-request API call — unlike the K8s informer (List+Watch) pattern used by `k8sattributesprocessor` and `k8sclusterreceiver` for resource discovery. None of the existing collector auth extensions (OIDC, bearer token) cache token validation results — they validate every request. A TokenReview auth extension would be the first to need a per-request validation cache.
+
+   The K8s ecosystem pattern is **passive TTL-based expiration with no active revocation** — no project implements push-based cache invalidation for TokenReview results:
+   - **kube-rbac-proxy:** 10s default TTL (configurable via `--authentication-token-webhook-cache-ttl`)
+   - **kube-apiserver:** 2 min default for webhook token cache (`--authentication-token-webhook-cache-ttl`), 30s for unauthorized SAR results
+   - **Asymmetric caching is standard:** cache positive (authenticated) results longer, negative (rejected) results briefly or not at all
+
+   Revocation is handled by **short-lived bound SA tokens** — projected tokens are bound to the pod, so deleting the pod triggers revocation within ~60s plus the cache TTL. This is the ecosystem's preferred revocation mechanism over explicit cache invalidation.
+
+   **Recommendation:** configurable TTL with a short default (10s–2 min range), asymmetric positive/negative caching, cache key as SHA-256 hash of the token (not the raw token). What is the expected QPS and can the K8s API server handle it?
 
 ## Constraints
 
 1. All approaches must work with the upstream OpenTelemetry Collector — no proprietary forks.
 2. New components should be contributed upstream to opentelemetry-collector-contrib, not maintained only in the Red Hat distro.
 3. The solution must work for OTLP over both gRPC and HTTP protocols.
-4. SA token projection requires sender-side pod spec changes (`serviceAccountToken` volume with audience) — this is a deployment requirement, not a collector change. The audience value is a deployment choice that depends on how identity is forwarded: a collector-specific audience when the collector terminates the token, or the backend's expected audience when the token is passed through for downstream authorization.
+4. SA token projection with a custom audience requires sender-side pod spec changes (`serviceAccountToken` volume with `audience` field) — this is a deployment requirement, not a collector change. The audience is optional (defaults to the cluster's API server audience). When set, the value depends on how identity is forwarded: a collector-specific audience when the collector terminates the token, or the backend's expected audience when the token is passed through for downstream authorization.
