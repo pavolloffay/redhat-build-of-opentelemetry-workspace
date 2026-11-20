@@ -412,20 +412,25 @@ service:
 
 ## RHOAI Use Case Mapping
 
-The RHOAI use case (RHAIRFE-3630, RHAISTRAT-2925) wants identity-based OTel trace routing from MaaS endpoints to MLflow experiments. How OBSDA-1512 capabilities map:
+The RHOAI use case (RHAIRFE-3630, RHAISTRAT-2925) wants identity-based OTel trace routing from MaaS (Model-as-a-Service) endpoints to MLflow experiments. MaaS is an RHOAI feature that provides hosted LLM inference endpoints on OpenShift — agents/applications send prompts and get completions back. The MaaS architecture consists of an Envoy gateway with Authorino/Kuadrant for authentication, a payload processor (`ai-gateway-payload-processing`, an Envoy ext-proc plugin handling request/response mutation), and the model serving backend (KServe). RHAISTRAT-2925 describes **two trace flows**:
 
-| RHOAI Need | OBSDA-1512 Mechanism |
-|---|---|
-| Identify calling agent/service | K8s SA token authentication (Approach 1) |
-| Route traces to per-namespace MLflow | Routing connector with identity-based OTTL conditions |
-| Prevent cross-tenant trace writes | Implicit authorization via routing (Approach 2A) |
-| Correlate agent traces with MaaS traces | Verified identity stamped into resource attributes, forwarded via headers |
+**Flow 1 — MaaS-captured traces (RHAISTRAT-2925 primary flow):** The MaaS payload processor (`ai-gateway-payload-processing`) captures LLM call traces (prompt, completion, latency, tokens) at the gateway layer without any agent instrumentation. The payload processor resolves routing via a `TraceRoutingRule` CRD that maps identity → workspace + experiment, stamps a `maas.trace.target_experiment` attribute on the span, and exports to the OTel Collector. RHAISTRAT-2925 proposes a **custom MLflow exporter** — an RHOAI-specific collector component (not an upstream OTel component) that uses the MLflow Go SDK (`opendatahub-io/mlflow-go`) to call the MLflow REST tracking API (e.g., `POST /api/2.0/mlflow/runs/create`, `/log-batch`). The exporter reads the `maas.trace.target_experiment` attribute to determine which experiment to write to, and passes workspace context via HTTP headers on the API calls. This component does not exist yet — it is part of the proposed RHAISTRAT-2925 design (auto-generated strategy, `New` status). An alternative that avoids building a custom exporter: use MLflow's native OTLP/HTTP endpoint (`/v1/traces`, since v3.6.0) with a standard `otlphttp` exporter and pass the experiment via the `x-mlflow-experiment-id` header. In this flow, Authorino/Kuadrant authenticates the caller at the MaaS API layer — the collector does not perform authentication.
 
-**RHOAI-specific notes beyond OBSDA-1512:**
-- Authorization operates at the **namespace level** via K8s RBAC. Each MLflow namespace (workspace) contains multiple experiments. Routing is per-namespace; the experiment is a passthrough header that the backend resolves.
-- MLflow (since v3.6.0) exposes an OTLP/HTTP endpoint at `/v1/traces` — a standard `otlphttp` exporter works directly, no custom bridge needed. The experiment is targeted via the `x-mlflow-experiment-id` header, which the headers setter extension can set per-pipeline. OTLP/gRPC is not supported by MLflow.
-- The RHAISTRAT-2925 strategy's `TraceRoutingRule` CRD is an RHOAI-specific abstraction, not a collector/operator feature. OBSDA-1512 provides the underlying collector primitives that such a CRD would configure.
-- **Token passthrough is required:** MLflow needs the sender's original SA token to perform its own SubjectAccessReview. The collector must forward the token via the headers setter extension's metadata passthrough (see "Token Passthrough to Backends" section above). This constrains the audience choice — the token's audience must be acceptable to both the collector and MLflow.
+**Flow 2 — Agent-emitted traces (OBSDA-1512 scope):** Agents send their own OTel traces directly to the collector with their K8s SA token. The collector authenticates the sender, routes by identity to the correct pipeline, and forwards to MLflow with the original token. This flow is what OBSDA-1512 enables — the collector itself is the authenticator.
+
+Both flows converge at the collector and use the same downstream path to MLflow. OBSDA-1512 provides the collector primitives for Flow 2 and the routing/forwarding infrastructure for both.
+
+| RHOAI Need | Flow 1 (MaaS-captured) | Flow 2 (Agent-emitted, OBSDA-1512) |
+|---|---|---|
+| Identify caller | Authorino/Kuadrant at MaaS gateway | K8s SA token auth at the collector |
+| Route to MLflow experiment | `maas.trace.target_experiment` attribute set by payload processor | Routing connector with identity-based OTTL conditions |
+| Prevent cross-tenant writes | MaaS gateway authorization + MLflow SAR | Collector auth + MLflow SAR with forwarded token |
+| Correlate agent ↔ MaaS traces | Shared identity stamped into resource attributes by both payload processor and collector |
+
+**RHOAI-specific notes:**
+- Authorization operates at the **namespace level** (workspace). Each workspace contains multiple experiments. The routing is identity → workspace; the experiment is targeted via the `x-mlflow-experiment-id` header (OTLP approach) or as an API parameter (custom exporter approach).
+- The `TraceRoutingRule` CRD (RHAISTRAT-2925) is an RHOAI-specific abstraction, not a collector/operator feature. OBSDA-1512 provides the underlying collector primitives that such a CRD would configure.
+- **Token passthrough (Flow 2 only):** MLflow needs the sender's original SA token to perform its own SubjectAccessReview. The collector forwards the token via the headers setter extension's metadata passthrough (see "Identity Forwarding and Token Passthrough Example" above). This constrains the audience — the token must be acceptable to both collector and MLflow.
 
 ## Components Needed in the Red Hat Distro
 
