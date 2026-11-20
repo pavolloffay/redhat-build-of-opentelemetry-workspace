@@ -427,10 +427,28 @@ Both flows converge at the collector and use the same downstream path to MLflow.
 | Prevent cross-tenant writes | MaaS gateway authorization + MLflow SAR | Collector auth + MLflow SAR with forwarded token |
 | Correlate agent ↔ MaaS traces | Shared identity stamped into resource attributes by both payload processor and collector |
 
+**MLflow authorization model:**
+
+MLflow on RHOAI uses the [`mlflow-kubernetes-plugins`](https://github.com/HumairAK/mlflow-kubernetes-plugins) authorization plugin (`MLFLOW_K8S_AUTH_AUTHORIZATION_MODE=self_subject_access_review`). Every API request triggers a `SelfSubjectAccessReview` using the caller's bearer token, checking whether the token has permission on **pseudo-resources** in the `mlflow.kubeflow.org` API group. These pseudo-resources (`experiments`, `datasets`, `registeredmodels`, etc.) are not real CRDs — they exist only for RBAC policy evaluation.
+
+Three built-in ClusterRoles:
+
+| ClusterRole | Purpose | Verbs on `mlflow.kubeflow.org` pseudo-resources |
+|---|---|---|
+| `mlflow-operator-mlflow-view` | Read-only | `get`, `list` |
+| `mlflow-operator-mlflow-edit` | Full write (human-facing) | `create`, `update`, `delete` + control-plane |
+| `mlflow-operator-mlflow-integration` | Data-plane for service accounts | `get`, `list`, `create`, `update` (no `delete`) |
+
+The **`mlflow-integration`** role is intended for the collector/agent use case. It supports `resourceName` granularity — a SA can be restricted to a specific experiment. Bound via a **RoleBinding** in the target workspace namespace.
+
+Workspace = K8s namespace. The workspace provider maps MLflow workspaces to namespaces. The `X-MLFLOW-WORKSPACE` header selects the workspace on API calls.
+
 **RHOAI-specific notes:**
-- Authorization operates at the **namespace level** (workspace). Each workspace contains multiple experiments. The routing is identity → workspace; the experiment is targeted via the `x-mlflow-experiment-id` header (OTLP approach) or as an API parameter (custom exporter approach).
+- Authorization is **per service account**. MLflow performs a `SelfSubjectAccessReview` checking whether the SA has `create`/`update` on `experiments` in `mlflow.kubeflow.org` within the target namespace. "Namespace-level" isolation is an operational convention via RoleBindings, not a technical constraint — a SA could be granted cross-namespace access if needed.
+- Each workspace contains multiple experiments; the experiment is targeted via the `x-mlflow-experiment-id` header (OTLP approach) or as an API parameter (custom exporter approach).
 - The `TraceRoutingRule` CRD (RHAISTRAT-2925) is an RHOAI-specific abstraction, not a collector/operator feature. OBSDA-1512 provides the underlying collector primitives that such a CRD would configure.
-- **Token passthrough (Flow 2 only):** MLflow needs the sender's original SA token to perform its own SubjectAccessReview. The collector forwards the token via the headers setter extension's metadata passthrough (see "Identity Forwarding and Token Passthrough Example" above). This constrains the audience — the token must be acceptable to both collector and MLflow.
+- The `data-science-collector-mlflow-trace-export` ClusterRole mentioned in RHAISTRAT-2925 does not match any real role — the actual role is `mlflow-operator-mlflow-integration`.
+- **Token passthrough (Flow 2 only):** MLflow needs the sender's original SA token to perform its own `SelfSubjectAccessReview`. The collector forwards the token via the headers setter extension's metadata passthrough (see "Identity Forwarding and Token Passthrough Example" above). This constrains the audience — the token must be acceptable to both collector and MLflow.
 
 ## Components Needed in the Red Hat Distro
 
