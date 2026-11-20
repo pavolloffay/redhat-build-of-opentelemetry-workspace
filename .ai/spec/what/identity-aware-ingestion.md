@@ -54,12 +54,18 @@ processors:
   resource:
     attributes:
       - key: sender.namespace
+        action: delete                       # clear any sender-supplied value first
+      - key: sender.service_account
+        action: delete                       # clear any sender-supplied value first
+      - key: sender.namespace
         from_context: "auth.namespace"
-        action: upsert
+        action: insert                       # insert, not upsert — fails visibly if auth attribute is missing
       - key: sender.service_account
         from_context: "auth.service_account"
-        action: upsert
+        action: insert
 ```
+
+**Security: delete before stamping.** Using `upsert` alone is unsafe — if the auth extension does not provide the requested attribute, `upsert` leaves any pre-existing value unchanged. A sender could supply a `sender.namespace` resource attribute that downstream consumers mistake for verified identity. The `delete` + `insert` pattern ensures: (1) any sender-supplied value is removed, and (2) if the auth attribute is missing, the key is absent rather than holding an unverified value.
 
 Confirmed in [`internal/coreinternal/attraction/attraction.go`](https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/internal/coreinternal/attraction/attraction.go) (line 371: `authPrefix = "auth."`).
 
@@ -110,15 +116,19 @@ processors:
   resource/stamp-identity:
     attributes:
       - key: sender.namespace
+        action: delete                       # clear sender-supplied value
+      - key: sender.service_account
+        action: delete                       # clear sender-supplied value
+      - key: sender.namespace
         from_context: "auth.namespace"
-        action: upsert
+        action: insert                       # insert verified identity
       - key: sender.service_account
         from_context: "auth.service_account"
-        action: upsert
+        action: insert
 
 exporters:
   otlphttp/mlflow:
-    endpoint: http://mlflow:5000/v1/traces   # MLflow OTLP/HTTP endpoint (since v3.6.0, OTLP/gRPC not supported)
+    endpoint: http://mlflow:5000   # the exporter auto-appends /v1/traces; MLflow OTLP/HTTP since v3.6.0, gRPC not supported
     auth:
       authenticator: headers_setter
     sending_queue:                          # replaces the deprecated batchprocessor (QueueBatchConfig)
@@ -137,10 +147,21 @@ service:
 ```
 
 **Two forwarding mechanisms in one config:**
-- **`from_attribute: namespace`** — reads from `client.Info.Auth` (set by the auth extension). Sets `X-Scope-OrgID` for multi-tenant backends. Lost during batching — only works if the exporter does not batch, or if batching is disabled.
-- **`from_context: authorization`** — reads from `client.Info.Metadata` (raw request headers). Passes through the original bearer token. Survives batching when `metadata_keys` includes `authorization`.
+- **`from_attribute: namespace`** — reads from `client.Info.Auth` (set by the auth extension after TokenReview). This is the **verified** namespace — the sender cannot spoof it. Lost during batching — only works if the exporter does not batch.
+- **`from_context: authorization`** — reads from `client.Info.Metadata` (raw request headers). Passes through the original bearer token. Survives batching when `metadata_keys` includes `authorization`. The token itself is validated by the auth extension, so forwarding it is safe.
 
-**Batching caveat:** `metadata_keys` preserves specified metadata keys across batching but creates per-token batching buckets — each unique token gets its own batch. This preserves correctness but reduces batching efficiency. The `from_attribute: namespace` header will be lost after batching (see Context Lifecycle above); for pipelines with batching, use `from_context` with a metadata key instead. The config above uses exporter-level batching (`sending_queue::batch`) which replaces the deprecated `batchprocessor` (see migration RFC: [`docs/rfcs/batching-migration.md`](https://github.com/open-telemetry/opentelemetry-collector/blob/main/docs/rfcs/batching-migration.md)).
+**Security: `from_attribute` vs `from_context` for tenant headers.** `from_attribute` reads from verified auth data (TokenReview result) — the sender cannot control it. `from_context` reads from request metadata — the sender controls all incoming headers. **Never use `from_context` with a sender-supplied header as a tenant identifier** (e.g., `X-Scope-OrgID`), because the sender can set any value and select another tenant even when authentication succeeds. The safe patterns:
+- **Without batching:** use `from_attribute` (reads verified identity from `client.Info.Auth`).
+- **With batching:** use per-tenant pipelines with **static** header values. The routing connector routes to the correct pipeline using verified auth attributes (before batching), and the headers setter in each pipeline uses a hardcoded `value:`, not `from_context`:
+  ```yaml
+  headers_setter/team-a:
+    headers:
+      - action: upsert
+        key: X-Scope-OrgID
+        value: team-a          # static — not from sender metadata
+  ```
+
+**Batching caveat:** `metadata_keys` preserves specified metadata keys across batching but creates per-token batching buckets — each unique token gets its own batch. This preserves correctness but reduces batching efficiency. The `from_attribute: namespace` header will be lost after batching (see Context Lifecycle above). The config above uses exporter-level batching (`sending_queue::batch`) which replaces the deprecated `batchprocessor` (see migration RFC: [`docs/rfcs/batching-migration.md`](https://github.com/open-telemetry/opentelemetry-collector/blob/main/docs/rfcs/batching-migration.md)).
 
 **Audience constraint for passthrough:** When a backend validates the forwarded token via its own TokenReview, the token's audience must match what the backend expects. If the sender projected the token with a collector-specific audience (e.g., `otel-gateway`), the backend will reject it. The audience must be shared between collector and backend, or the backend must accept the collector's audience. See the audience discussion in Approach 1 below.
 
@@ -347,11 +368,15 @@ processors:
   resource/stamp-identity:
     attributes:
       - key: sender.namespace
+        action: delete
+      - key: sender.service_account
+        action: delete
+      - key: sender.namespace
         from_context: "auth.namespace"
-        action: upsert
+        action: insert
       - key: sender.service_account
         from_context: "auth.service_account"
-        action: upsert
+        action: insert
   batch/team-a:
     timeout: 5s
   batch/team-b:
@@ -414,7 +439,7 @@ service:
 
 The RHOAI use case (RHAIRFE-3630, RHAISTRAT-2925) wants identity-based OTel trace routing from MaaS (Model-as-a-Service) endpoints to MLflow experiments. MaaS is an RHOAI feature that provides hosted LLM inference endpoints on OpenShift — agents/applications send prompts and get completions back. The MaaS architecture consists of an Envoy gateway with Authorino/Kuadrant for authentication, a payload processor (`ai-gateway-payload-processing`, an Envoy ext-proc plugin handling request/response mutation), and the model serving backend (KServe). RHAISTRAT-2925 describes **two trace flows**:
 
-**Flow 1 — MaaS-captured traces (RHAISTRAT-2925 primary flow):** The MaaS payload processor (`ai-gateway-payload-processing`) captures LLM call traces (prompt, completion, latency, tokens) at the gateway layer without any agent instrumentation. The payload processor resolves routing via a `TraceRoutingRule` CRD that maps identity → workspace + experiment, stamps a `maas.trace.target_experiment` attribute on the span, and exports to the OTel Collector. RHAISTRAT-2925 proposes a **custom MLflow exporter** — an RHOAI-specific collector component (not an upstream OTel component) that uses the MLflow Go SDK (`opendatahub-io/mlflow-go`) to call the MLflow REST tracking API (e.g., `POST /api/2.0/mlflow/runs/create`, `/log-batch`). The exporter reads the `maas.trace.target_experiment` attribute to determine which experiment to write to, and passes workspace context via HTTP headers on the API calls. This component does not exist yet — it is part of the proposed RHAISTRAT-2925 design (auto-generated strategy, `New` status). An alternative that avoids building a custom exporter: use MLflow's native OTLP/HTTP endpoint (`/v1/traces`, since v3.6.0) with a standard `otlphttp` exporter and pass the experiment via the `x-mlflow-experiment-id` header. In this flow, Authorino/Kuadrant authenticates the caller at the MaaS API layer — the collector does not perform authentication.
+**Flow 1 — MaaS-captured traces (RHAISTRAT-2925, not in OBSDA-1512 scope):** The MaaS payload processor (`ai-gateway-payload-processing`) captures LLM call traces (prompt, completion, latency, tokens) at the gateway layer without any agent instrumentation. The payload processor resolves routing via a `TraceRoutingRule` CRD that maps identity → workspace + experiment, stamps a `maas.trace.target_experiment` attribute on the span, and exports to the OTel Collector. RHAISTRAT-2925 proposes a **custom MLflow exporter** — an RHOAI-specific collector component (not an upstream OTel component) that uses the MLflow Go SDK (`opendatahub-io/mlflow-go`) to call the MLflow REST tracking API (e.g., `POST /api/2.0/mlflow/runs/create`, `/log-batch`). The exporter reads the `maas.trace.target_experiment` attribute to determine which experiment to write to, and passes workspace context via HTTP headers on the API calls. This component does not exist yet — it is part of the proposed RHAISTRAT-2925 design (auto-generated strategy, `New` status). An alternative that avoids building a custom exporter: use MLflow's native OTLP/HTTP endpoint (`/v1/traces`, since v3.6.0) with a standard `otlphttp` exporter and pass the experiment via the `x-mlflow-experiment-id` header. In this flow, Authorino/Kuadrant authenticates the caller at the MaaS API layer — the collector does not perform authentication. Receiver isolation (preventing direct access that bypasses the MaaS gateway) is an RHOAI deployment concern (network policy), not an OTel collector feature.
 
 **Flow 2 — Agent-emitted traces (OBSDA-1512 scope):** Agents send their own OTel traces directly to the collector with their K8s SA token. The collector authenticates the sender, routes by identity to the correct pipeline, and forwards to MLflow with the original token. This flow is what OBSDA-1512 enables — the collector itself is the authenticator.
 
