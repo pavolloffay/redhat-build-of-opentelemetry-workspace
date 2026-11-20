@@ -92,7 +92,7 @@ The distro includes 4 connectors in source. Support levels per documentation:
 
 ### Extensions
 
-The distro includes 11 extensions in source. Support levels per documentation:
+The distro includes 12 extensions in source. Support levels per documentation:
 
 | Extension | Support Level | Notes |
 |---|---|---|
@@ -101,11 +101,12 @@ The distro includes 11 extensions in source. Support levels per documentation:
 | OAuth2 Client | **TP** | |
 | File Storage | **TP** | |
 | OIDC Auth | **TP** | |
-| Headers Setter | **Not supported** | Present in source but not documented |
+| Headers Setter | **TP** | Technology Preview since 3.11 (3.11.0 release notes); docs module in review (openshift/openshift-docs#124255, TRACING-6505) |
 | Jaeger Remote Sampling | **TP** | |
 | Performance Profiler (pprof) | **TP** | |
 | Health Check | **TP** | |
 | zPages | **TP** | |
+| Kubernetes Leader Elector | **TP** | Technology Preview since 3.11 (3.11.0 release notes); has a docs module |
 | Memory Limiter (extension) | **Not supported** | Present in source but not documented |
 
 ### Configuration
@@ -135,8 +136,8 @@ The in-cluster (platform) and user workload monitoring (UWM) Prometheus instance
 | Exporters | 6 | 6 | 0 |
 | Processors | 10 | 4 | 0 |
 | Connectors | 1 | 3 | 0 |
-| Extensions | 2 | 7 | 2 |
-| **Total** | **29** | **25** | **2** |
+| Extensions | 2 | 9 | 1 |
+| **Total** | **29** | **27** | **1** |
 
 ## Configuration Surface
 

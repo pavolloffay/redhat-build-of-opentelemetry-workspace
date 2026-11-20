@@ -59,13 +59,13 @@ processors:
         action: delete                       # clear any sender-supplied value first
       - key: sender.namespace
         from_context: "auth.namespace"
-        action: insert                       # insert, not upsert — fails visibly if auth attribute is missing
+        action: insert                       # skipped silently if the auth attribute is missing
       - key: sender.service_account
         from_context: "auth.service_account"
         action: insert
 ```
 
-**Security: delete before stamping.** Using `upsert` alone is unsafe — if the auth extension does not provide the requested attribute, `upsert` leaves any pre-existing value unchanged. A sender could supply a `sender.namespace` resource attribute that downstream consumers mistake for verified identity. The `delete` + `insert` pattern ensures: (1) any sender-supplied value is removed, and (2) if the auth attribute is missing, the key is absent rather than holding an unverified value.
+**Security: delete before stamping, and reject unstamped data.** Using `upsert` alone is unsafe — if the auth extension does not provide the requested attribute, `upsert` leaves any pre-existing value unchanged, so a sender could supply a `sender.namespace` resource attribute that downstream consumers mistake for verified identity. The `delete` first removes any sender-supplied value. Caveat: `insert` does **not** fail visibly — in `attraction.go` (checked at v0.163.0) the action is silently skipped when the `from_context` value is not found, with no log or error, and after the `delete` it behaves the same as `upsert`. The data continues with no `sender.namespace` and nothing tells the operator. The actual enforcement must therefore be structural: route data without a verified identity to the reject pipeline (see the routing connector's `default_pipelines` in the examples below) so unstamped data never reaches a tenant exporter.
 
 Confirmed in [`internal/coreinternal/attraction/attraction.go`](https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/internal/coreinternal/attraction/attraction.go) (line 371: `authPrefix = "auth."`).
 
@@ -79,93 +79,101 @@ The **headers setter extension** (`headerssetter`) can set outbound headers on e
 
 **Important:** The headers setter's `from_context` and `from_attribute` are different from the resource processor's `from_context`. The resource processor's `from_context` supports the `auth.` prefix to read auth attributes (e.g., `from_context: "auth.claims.tenant_id"`). The headers setter does NOT — its `from_context` reads only from request metadata, and `from_attribute` reads from auth attributes.
 
-**Example — forwarding a tenant ID claim as `X-Scope-OrgID` to a multi-tenant backend:**
-
 ### Identity Forwarding and Token Passthrough Example
 
-This example combines both patterns: forwarding a **derived tenant header** (`X-Scope-OrgID`) and passing through the **raw bearer token** so the backend can perform its own authorization. This matches the RHOAI use case — the collector authenticates and routes by namespace, while MLflow receives the original token for its own SubjectAccessReview.
+This example shows the RHOAI Flow 2 pattern for MLflow: the routing connector selects a per-identity pipeline using verified auth attributes, each pipeline sets a **static** experiment header, and the raw bearer token is passed through so MLflow can perform its own `SelfSubjectAccessReview`. It assumes the `k8s_sa_auth` extension (Authentication Option B) exists — it does not exist yet.
 
-This example assumes the `k8s_token_auth` extension from Approach 1 (Option B) exists — it does not exist yet. When `include_metadata: true` is set on the receiver, ALL incoming headers (including `Authorization`) are stored in `client.Info.Metadata`. The headers setter extension forwards them using `from_context` (which reads from metadata). This works for both gRPC ([`configgrpc.go`](https://github.com/open-telemetry/opentelemetry-collector/blob/main/config/configgrpc/configgrpc.go) copies all gRPC metadata) and HTTP ([`confighttp/clientinfohandler.go`](https://github.com/open-telemetry/opentelemetry-collector/blob/main/config/confighttp/clientinfohandler.go) clones all HTTP headers) receivers.
+When `include_metadata: true` is set on the receiver, ALL incoming headers (including `Authorization`) are stored in `client.Info.Metadata`. The headers setter extension forwards the token using `from_context` (which reads from metadata). This works for both gRPC ([`configgrpc.go`](https://github.com/open-telemetry/opentelemetry-collector/blob/main/config/configgrpc/configgrpc.go) copies all gRPC metadata) and HTTP ([`confighttp/clientinfohandler.go`](https://github.com/open-telemetry/opentelemetry-collector/blob/main/config/confighttp/clientinfohandler.go) clones all HTTP headers) receivers.
 
 ```yaml
 receivers:
   otlp:
     protocols:
       grpc:
-        include_metadata: true
+        include_metadata: true            # store request headers in client.Info.Metadata
         auth:
-          authenticator: k8s_token_auth
+          authenticator: k8s_sa_auth
       http:
         include_metadata: true
         auth:
-          authenticator: k8s_token_auth
+          authenticator: k8s_sa_auth
 
 extensions:
-  k8s_token_auth:
-    audiences: [shared-audience]  # optional; must be accepted by BOTH collector and backend for passthrough
-  headers_setter:
+  k8s_sa_auth: {}                         # audiences defaults to the API server audience — required for MLflow passthrough (see audience note below)
+  headers_setter/team-a:
     headers:
       - action: upsert
-        key: X-Scope-OrgID              # derived tenant header for multi-tenant backends (Tempo, Mimir, Loki)
-        from_attribute: namespace        # reads from client.Info.Auth (only works without batching)
+        key: x-mlflow-experiment-id        # static per-tenant experiment — never taken from sender metadata
+        value: "12345"
       - action: upsert
-        key: Authorization              # raw bearer token passthrough for backend authorization (e.g., MLflow SSAR)
-        from_context: authorization      # reads from client.Info.Metadata
+        key: Authorization                 # raw bearer token passthrough for MLflow SSAR
+        from_context: authorization        # reads from client.Info.Metadata
 
 processors:
   resource/stamp-identity:
     attributes:
       - key: sender.namespace
-        action: delete                       # clear sender-supplied value
+        action: delete                     # clear sender-supplied value
       - key: sender.service_account
-        action: delete                       # clear sender-supplied value
+        action: delete                     # clear sender-supplied value
       - key: sender.namespace
         from_context: "auth.namespace"
-        action: insert                       # insert verified identity
+        action: insert                     # insert verified identity
       - key: sender.service_account
         from_context: "auth.service_account"
         action: insert
 
+connectors:
+  routing:
+    table:
+      - condition: otelcol.client.auth.attributes["namespace"] == "team-a"
+        pipelines: [traces/team-a]
+    default_pipelines: [traces/reject]     # data without verified identity never reaches a tenant exporter
+
 exporters:
-  otlphttp/mlflow:
-    endpoint: http://mlflow:5000   # the exporter auto-appends /v1/traces; MLflow OTLP/HTTP requires v3.7.0+ (v3.6.0 has gzip and content-type bugs), gRPC not supported
+  otlphttp/mlflow-team-a:
+    endpoint: http://mlflow:5000           # the exporter auto-appends /v1/traces; MLflow OTLP/HTTP requires v3.7.0+ (v3.6.0 has gzip and content-type bugs), gRPC not supported. Use TLS in production.
     auth:
-      authenticator: headers_setter
-    sending_queue:                          # replaces the deprecated batchprocessor (QueueBatchConfig)
-      batch:                                # batching config within the sending queue
-        partition:                          # partitioning controls how requests are grouped into batches
-          metadata_keys:                    # requests with different values for these keys get separate batches
-            - authorization                 # each unique bearer token gets its own batch, preserving the token across batching
+      authenticator: headers_setter/team-a
+    sending_queue:                         # replaces the deprecated batchprocessor (QueueBatchConfig)
+      batch:                               # batching config within the sending queue
+        partition:                         # partitioning controls how requests are grouped into batches
+          metadata_keys:                   # requests with different values for these keys get separate batches
+            - authorization                # each unique bearer token gets its own batch, preserving the token across batching
+  debug/reject:
+    verbosity: basic
 
 service:
-  extensions: [k8s_token_auth, headers_setter]
+  extensions: [k8s_sa_auth, headers_setter/team-a]
   pipelines:
-    traces:
+    traces/ingress:
       receivers: [otlp]
       processors: [resource/stamp-identity]
-      exporters: [otlphttp/mlflow]
+      exporters: [routing]
+    traces/team-a:
+      receivers: [routing]
+      exporters: [otlphttp/mlflow-team-a]
+    traces/reject:
+      receivers: [routing]
+      exporters: [debug/reject]
 ```
 
-**Two forwarding mechanisms in one config:**
-- **`from_attribute: namespace`** — reads from `client.Info.Auth` (set by the auth extension after TokenReview). This is the **verified** namespace — the sender cannot spoof it. Lost during batching — only works if the exporter does not batch.
-- **`from_context: authorization`** — reads from `client.Info.Metadata` (raw request headers). Passes through the original bearer token. Survives batching when `metadata_keys` includes `authorization`. The token itself is validated by the auth extension, so forwarding it is safe.
+The `traces/team-a` pipeline pattern repeats per tenant — one headers setter, one exporter, one routing table entry each.
 
-**Security: `from_attribute` vs `from_context` for tenant headers.** `from_attribute` reads from verified auth data (TokenReview result) — the sender cannot control it. `from_context` reads from request metadata — the sender controls all incoming headers. **Never use `from_context` with a sender-supplied header as a tenant identifier** (e.g., `X-Scope-OrgID`), because the sender can set any value and select another tenant even when authentication succeeds. The safe patterns:
+**Three header sources, different trust and durability characteristics:**
+- **Static `value:`** — the per-tenant experiment (or tenant) header. The routing connector already selected the pipeline using verified auth attributes before batching, so a hardcoded value is trusted. Safe under batching. This is the only safe way to set a tenant identifier on a batched exporter.
+- **`from_context: authorization`** — token passthrough. The sender controls the header, but the auth extension validates the token at ingestion, so forwarding it is safe. Survives batching when `metadata_keys` includes `authorization`.
+- **`from_attribute`** — reads verified identity from `client.Info.Auth`. **Do not use with a batched exporter:** the headers setter's `AttributeSource.Get` calls `cl.Auth.GetAttribute` with no nil check, and when a second request merges into an existing batch the batch context carries `client.Info{Metadata: ...}` only — `Auth` is nil and the collector **panics** (same code at v0.158.0 and v0.163.0; a single request per batch keeps its original context, so the crash appears only under load). Without batching it works and is spoof-proof. With batching, use static per-pipeline values instead.
+
+**Security: never derive a tenant header from sender metadata.** `from_context` reads from request metadata — the sender controls all incoming headers. **Never use `from_context` with a sender-supplied header as a tenant identifier** (e.g., `X-Scope-OrgID` or `x-mlflow-experiment-id`), because the sender can set any value and select another tenant even when authentication succeeds. The safe patterns:
 - **Without batching:** use `from_attribute` (reads verified identity from `client.Info.Auth`).
-- **With batching:** use per-tenant pipelines with **static** header values. The routing connector routes to the correct pipeline using verified auth attributes (before batching), and the headers setter in each pipeline uses a hardcoded `value:`, not `from_context`:
-  ```yaml
-  headers_setter/team-a:
-    headers:
-      - action: upsert
-        key: X-Scope-OrgID
-        value: team-a          # static — not from sender metadata
-  ```
+- **With batching:** per-tenant pipelines with **static** header values, as in the example above — the routing decision is made on verified auth attributes before batching, and the headers setter uses a hardcoded `value:`.
 
-**Batching caveat:** `metadata_keys` preserves specified metadata keys across batching but creates per-token batching buckets — each unique token gets its own batch. This preserves correctness but reduces batching efficiency. The `from_attribute: namespace` header will be lost after batching (see Context Lifecycle above). The config above uses exporter-level batching (`sending_queue::batch`) which replaces the deprecated `batchprocessor` (see migration RFC: [`docs/rfcs/batching-migration.md`](https://github.com/open-telemetry/opentelemetry-collector/blob/main/docs/rfcs/batching-migration.md)).
+**Batching caveat:** `metadata_keys` preserves specified metadata keys across batching but creates per-token batching buckets — each unique token gets its own batch. This preserves correctness but reduces batching efficiency. The config above uses exporter-level batching (`sending_queue::batch`) which replaces the deprecated `batchprocessor` (see migration RFC: [`docs/rfcs/batching-migration.md`](https://github.com/open-telemetry/opentelemetry-collector/blob/main/docs/rfcs/batching-migration.md)).
 
-**Audience constraint for passthrough:** When a backend validates the forwarded token via its own TokenReview, the token's audience must match what the backend expects. If the sender projected the token with a collector-specific audience (e.g., `otel-gateway`), the backend will reject it. The audience must be shared between collector and backend, or the backend must accept the collector's audience. See the audience discussion in Approach 1 below.
+**Audience constraint for passthrough:** a shared custom audience **cannot work** when the backend validates the forwarded token via the K8s API. MLflow performs its `SelfSubjectAccessReview` with the forwarded token as a bearer credential against kube-apiserver, and the API server only accepts tokens that carry its own audience. A `serviceAccountToken` volume projection takes a single audience, so in practice the sender must use the **default-audience** token (audience `https://kubernetes.default.svc`) and the collector's TokenReview must accept that audience — which is the default. A collector-specific audience (e.g., `otel-gateway`) works only for the collector-terminated pattern, where identity is forwarded as derived attributes and the backend never sees the token. See the audience discussion in the End-to-End Example below.
 
-The headers setter extension is in the Red Hat distro manifest (`headerssetterextension v0.158.0`). Not supported — present in source but not documented (see `what/collector.md`).
+The headers setter extension is Technology Preview since 3.11 (docs module in review: [openshift/openshift-docs#124255](https://github.com/openshift/openshift-docs/pull/124255), TRACING-6505). The 3.12 build ships `headerssetterextension` v0.163.0 (see `what/collector.md`).
 
 ### Routing Connector
 
@@ -183,14 +191,14 @@ The routing connector (TP in the Red Hat distro) routes telemetry to different p
 | Context field | What it holds | Preserved after batching? |
 |---|---|---|
 | `client.Info.Metadata` | Request headers (HTTP) or metadata (gRPC), populated when `include_metadata: true`. E.g., `authorization`, `content-type`, custom headers. | Only entries whose key name is in `metadata_keys` are preserved (both old and new batcher); all other metadata entries are dropped |
-| `client.Info.Auth` | Structured identity from an auth extension: claims, subject, groups, raw token. Set by extensions like OIDC (`subject`, `membership`, `claims.*`, `raw`) or the proposed K8s SA auth (`namespace`, `service_account`). | **Never** — lost in all batching scenarios, including persistent queue (not serialized) |
+| `client.Info.Auth` | Structured identity from an auth extension: claims, subject, groups, raw token. Set by extensions like OIDC (`subject`, `membership`, `claims.*`, `raw`) or the proposed K8s SA auth (`namespace`, `service_account`). | **Never** — absent in all batching scenarios, including persistent queue (not serialized). Reading it via the headers setter's `from_attribute` after a batch merge **panics the collector** (nil `Auth`, no nil check in `AttributeSource.Get`) |
 | `client.Info.Addr` | The client's network address (`net.Addr`). | Lost in memory batching; preserved in persistent queue serialization |
 
 **Implications for pipeline ordering:**
 - The **routing connector** must run before batching — it reads `client.Info.Auth` directly.
 - The **resource processor** must stamp auth attributes into resource attributes before batching — stamped attributes survive in the telemetry data.
-- The headers setter's **`from_attribute`** reads from `client.Info.Auth` — it won't work if the exporter uses batching. Use `from_context` with `metadata_keys` instead (see Token Passthrough below).
-- The headers setter's **`from_context`** reads from `client.Info.Metadata` — works after batching if the key is listed in `metadata_keys`.
+- The headers setter's **`from_attribute`** reads from `client.Info.Auth` — after a batch merge `Auth` is nil and the collector **panics**. Do not use it with a batched exporter; use static per-pipeline header values instead (see Identity Forwarding and Token Passthrough Example above).
+- The headers setter's **`from_context`** reads from `client.Info.Metadata` — works after batching if the key is listed in `metadata_keys`. Use it only for token passthrough, never for tenant identifiers (sender-controlled).
 
 ## Gap Analysis
 
@@ -202,14 +210,14 @@ The routing connector (TP in the Red Hat distro) routes telemetry to different p
 | Extract identity claims to pipeline context | OIDC auth → `client.Info.Auth` | **Works** |
 | Stamp verified identity into resource attributes | Resource processor `from_context: "auth.claims.*"` | **Works** |
 | Route to per-tenant pipelines based on identity | Routing connector `otelcol.client.auth.attributes["key"]` | **Works** (TP) |
-| Forward identity to multi-tenant backends | Headers setter extension `from_context` | **Works** — extension in distro (undocumented) |
+| Forward identity to multi-tenant backends | Headers setter extension with static per-pipeline values (plus `from_context` for token passthrough only) | **Works** — extension in distro (TP since 3.11) |
 
 ### What Is Missing
 
 | Need | Gap | Severity |
 |---|---|---|
 | **Kubernetes SA token authentication** | The OIDC extension **cannot** validate K8s SA tokens on OpenShift out of the box (see below). A new TokenReview auth extension is needed. | **High** — K8s workloads are the primary sender type on OpenShift |
-| **Authorization enforcement** | Auth extensions authenticate (who?) but nothing authorizes (may this sender write here?). The routing connector provides implicit authorization (route or drop) via its static routing table — this is sufficient for the use case (see Authorization section). | **Medium** — implicit authorization via routing is acceptable |
+| **Authorization enforcement** | Auth extensions authenticate (who?) but nothing authorizes (may this sender write here?). The routing connector provides implicit authorization (route or drop) via its static routing table — a workable baseline, but explicit SubjectAccessReview-based rejection is preferred (see Authorization section). | **Medium** — implicit authorization drops silently; explicit rejection is preferred |
 | **Rejection signaling** | When the routing connector has no matching route, data goes to `default_pipelines` or is dropped silently. There is no mechanism to send an error response to the sender explaining why data was rejected. | **Medium** — operators need visibility; senders need feedback |
 
 ## Approaches
@@ -235,23 +243,24 @@ The OIDC auth extension fetches `{issuer_url}/.well-known/openid-configuration` 
 
 #### Option B: K8s SA Auth Extension (TokenReview)
 
-A dedicated extension that validates the bearer token via the K8s TokenReview API, extracts identity (namespace, service account name, groups), and exposes them as auth attributes. This does not exist upstream yet — an external implementation exists: [`github.com/Jamstah/k8ssaauthextension`](https://github.com/Jamstah/k8ssaauthextension) by James Hewitt (IBM).
+A dedicated extension that validates the bearer token via the K8s TokenReview API, extracts identity (namespace, service account name, groups), and exposes them as auth attributes. This does not exist upstream yet — contrib v0.163.0 (the version 3.12 ships) and contrib main have no Kubernetes token auth extension. An external implementation exists: [`github.com/Jamstah/k8ssaauthextension`](https://github.com/Jamstah/k8ssaauthextension) by James Hewitt (IBM). Its component type is `k8ssaauth` and `audiences` defaults to `["https://kubernetes.default.svc"]`.
 
 ```yaml
 extensions:
-  k8s_token_auth:
-    audiences: [opentelemetry-collector]  # optional; defaults to cluster API server audience
+  k8s_sa_auth:   # component type in the Jamstah implementation: k8ssaauth
+    # audiences defaults to ["https://kubernetes.default.svc"] (the API server audience)
 ```
 
-The extension can optionally include a **SubjectAccessReview** step for authorization at the auth layer — see Authorization section below.
+The Jamstah implementation also includes a **SubjectAccessReview** step — and it is **mandatory**, not optional: `resource_attributes` (the SAR target) is a required setting, so the extension always performs TokenReview + SAR. See Authorization section below.
 
 **Current status:** Development stability, 6 commits, not proposed for `opentelemetry-collector-contrib`. The related core collector issue [#6987](https://github.com/open-telemetry/opentelemetry-collector/issues/6987) (closed) was about client-side K8s SA auth, not server-side.
 
 **Gaps:**
-- Auth attributes exposed via `client.Info.Auth` are not documented.
-- No caching of TokenReview results.
+- **The extension sets no `client.Info.Auth` at all.** In `k8ssaauth.go` the `Authenticate` function returns the incoming `ctx` unchanged, so no identity is exposed to the pipeline. Routing on `otelcol.client.auth.attributes["namespace"]`, resource processor `from_context: "auth.namespace"` and headers setter `from_attribute` all have nothing to read. Exposing the identity is new work, not just documentation.
+- **The TokenReview-only variant does not exist.** Because `resource_attributes` is required, there is no authentication-only mode; making SAR optional is new work if that variant is wanted.
+- No caching of TokenReview or SubjectAccessReview results.
 
-**Path forward:** Evaluate and improve the Jamstah extension (caching, auth attribute exposure), propose for `opentelemetry-collector-contrib`. The `k8sattributesprocessor` provides precedent for K8s-specific components in contrib.
+**Path forward:** Build on the Jamstah extension but treat it as a starting point: exposing identity via `client.Info.Auth` and making the SAR step optional are new development work, not improvements to existing behavior. Propose the result for `opentelemetry-collector-contrib`. The `k8sattributesprocessor` provides precedent for K8s-specific components in contrib.
 
 **Upstream discussion:** Issue [#48895](https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/48895) ("Support Multitenant Kubernetes Self-Service") — the closest upstream conversation to this use case.
 
@@ -309,7 +318,7 @@ Each routing rule is an allow rule (identity → pipeline). Per-tenant pipeline 
 
 #### Option B: Explicit Authorization via K8s RBAC (SubjectAccessReview)
 
-The K8s SA auth extension (Authentication Option B) can include a SubjectAccessReview step that rejects unauthorized senders _before_ data enters the pipeline:
+The K8s SA auth extension (Authentication Option B) includes a SubjectAccessReview step that rejects unauthorized senders _before_ data enters the pipeline — in the Jamstah implementation this step is mandatory (`resource_attributes` is a required setting; there is no TokenReview-only mode yet):
 
 ```yaml
 extensions:
@@ -337,12 +346,12 @@ Authorization is managed via standard K8s RBAC — an admin creates a Role grant
 
 ## End-to-End Example: Multi-Tenant Gateway
 
-Combining components for a two-tenant setup where each tenant uses a K8s service account with a projected token. This example assumes the TokenReview auth extension (Approach 1 Option B) exists.
+Combining components for a two-tenant setup where each tenant uses a K8s service account with a projected token. This example assumes the TokenReview auth extension (Authentication Option B) exists.
 
 ```yaml
 extensions:
-  k8s_token_auth:
-    audiences: [otel-gateway]
+  k8s_sa_auth:
+    audiences: [otel-gateway]   # collector-terminated pattern — see audience note in Key points below
   headers_setter/team-a:
     headers:
       - action: upsert
@@ -359,10 +368,10 @@ receivers:
     protocols:
       grpc:
         auth:
-          authenticator: k8s_token_auth
+          authenticator: k8s_sa_auth
       http:
         auth:
-          authenticator: k8s_token_auth
+          authenticator: k8s_sa_auth
 
 processors:
   resource/stamp-identity:
@@ -404,7 +413,7 @@ exporters:
     verbosity: basic
 
 service:
-  extensions: [k8s_token_auth, headers_setter/team-a, headers_setter/team-b]
+  extensions: [k8s_sa_auth, headers_setter/team-a, headers_setter/team-b]
   pipelines:
     traces/ingress:
       receivers: [otlp]
@@ -431,8 +440,8 @@ service:
 - Each tenant pipeline has its own batch processor and exporter with tenant-specific headers.
 - Unrecognized senders go to `traces/reject` — data is logged and dropped.
 - Senders can project their SA token with an explicit audience via a `serviceAccountToken` volume (optional — if omitted, the token uses the cluster's default audience, typically `https://kubernetes.default.svc`). When set, the audience is a deployment choice:
-  - **Collector-terminated:** Use a collector-specific audience (e.g., `otel-gateway`). The token is validated and consumed at the collector; identity is forwarded as derived attributes (e.g., `X-Scope-OrgID`). Suitable when backends trust the collector's identity assertions.
-  - **Token passthrough:** Use the backend's expected audience (or a shared audience accepted by both collector and backend). The original token is forwarded via the headers setter extension so backends can perform their own TokenReview/SubjectAccessReview. Required when backends (e.g., MLflow) need the sender's token for their own authorization.
+  - **Collector-terminated:** Use a collector-specific audience (e.g., `otel-gateway`). The token is validated and consumed at the collector; identity is forwarded as derived attributes (e.g., `X-Scope-OrgID`). Suitable when backends trust the collector's identity assertions. This is the pattern shown in this Tempo example.
+  - **Token passthrough:** The sender must use the **default-audience** token. Backends like MLflow present the forwarded token to kube-apiserver (SelfSubjectAccessReview), and the API server only accepts tokens carrying its own audience — a collector-specific or shared custom audience breaks the backend's validation. The collector's TokenReview must accept the default audience (which is its default). Required when backends (e.g., MLflow) need the sender's token for their own authorization.
 - The collector's service account needs a ClusterRole with `create` on `tokenreviews` in `authentication.k8s.io`.
 
 ## RHOAI Use Case Mapping
@@ -450,7 +459,7 @@ Both flows converge at the collector and use the same downstream path to MLflow.
 | Identify caller | Authorino/Kuadrant at MaaS gateway | K8s SA token auth at the collector |
 | Route to MLflow experiment | `maas.trace.target_experiment` attribute set by payload processor | Routing connector with identity-based OTTL conditions |
 | Prevent cross-tenant writes | MaaS gateway authorization + MLflow SAR | Collector auth + MLflow SAR with forwarded token |
-| Correlate agent ↔ MaaS traces | Shared identity stamped into resource attributes by both payload processor and collector |
+| Correlate agent ↔ MaaS traces | Identity stamped into resource attributes by the payload processor | Identity stamped into resource attributes by the collector from the verified SA token |
 
 **MLflow authorization model:**
 
@@ -473,7 +482,7 @@ Workspace = K8s namespace. The workspace provider maps MLflow workspaces to name
 - Each workspace contains multiple experiments; the experiment is targeted via the `x-mlflow-experiment-id` header (OTLP approach) or as an API parameter (custom exporter approach).
 - The `TraceRoutingRule` CRD (RHAISTRAT-2925) is an RHOAI-specific abstraction, not a collector/operator feature. OBSDA-1512 provides the underlying collector primitives that such a CRD would configure.
 - The `data-science-collector-mlflow-trace-export` ClusterRole mentioned in RHAISTRAT-2925 does not match any real role — the actual role is `mlflow-operator-mlflow-integration`.
-- **Token passthrough (Flow 2 only):** MLflow needs the sender's original SA token to perform its own `SelfSubjectAccessReview`. The collector forwards the token via the headers setter extension's metadata passthrough (see "Identity Forwarding and Token Passthrough Example" above). This constrains the audience — the token must be acceptable to both collector and MLflow.
+- **Token passthrough (Flow 2 only):** MLflow needs the sender's original SA token to perform its own `SelfSubjectAccessReview`. The collector forwards the token via the headers setter extension's metadata passthrough (see "Identity Forwarding and Token Passthrough Example" above). MLflow presents the token to kube-apiserver, which only accepts tokens carrying the API server audience — so senders must use **default-audience** tokens and the collector must accept that audience (its default). A collector-specific audience breaks MLflow's validation.
 
 ## Components Needed in the Red Hat Distro
 
@@ -484,30 +493,32 @@ Workspace = K8s namespace. The workspace provider maps MLflow workspaces to name
 | Routing Connector | Yes (TP) | Identity-based routing and implicit authorization |
 | Resource Processor | Yes (GA) | Stamping verified identity into attributes |
 | Attributes Processor | Yes (GA) | Stamping verified identity into span/log/metric attributes |
-| Headers Setter Extension | Yes (undocumented) | Forwarding identity to backends |
+| Headers Setter Extension | Yes (TP since 3.11) | Forwarding identity to backends |
 | Transform Processor | Yes (GA) | Complex identity transformations |
 
-**Action required:** Evaluate and improve the Jamstah `k8ssaauthextension`, then propose it for inclusion in `opentelemetry-collector-contrib`. Document the headers setter extension.
+**Action required:** Build a K8s SA auth extension for `opentelemetry-collector-contrib`. The Jamstah `k8ssaauthextension` is a starting point, but two pieces are new work, not improvements: (1) its `Authenticate` returns the context unchanged — it sets no `client.Info.Auth`, so exposing identity (namespace, service account as auth attributes) must be developed; (2) its SubjectAccessReview step is mandatory (`resource_attributes` is required), so a TokenReview-only variant must also be developed if wanted. Headers setter documentation is already in progress (TRACING-6505).
 
 ## Risks and Open Questions
 
 ### Risks
 
-1. **K8s SA auth extension is early-stage.** The Jamstah `k8ssaauthextension` exists but is at development stability (6 commits, not yet proposed upstream). It needs improvements (caching, documented auth attributes) before production use. The kube-rbac-proxy sidecar pattern can serve as an interim solution.
+1. **K8s SA auth extension is early-stage.** The Jamstah `k8ssaauthextension` exists but is at development stability (6 commits, not yet proposed upstream). Beyond maturity, two functional gaps require new development: its `Authenticate` sets no `client.Info.Auth` (identity is not exposed to the pipeline at all), and its SubjectAccessReview step is mandatory (`resource_attributes` is required), so no TokenReview-only variant exists. Caching is also missing. The kube-rbac-proxy sidecar pattern can serve as an interim solution.
 
 2. **OIDC extension does not work for K8s SA tokens on OpenShift.** The OIDC discovery endpoint requires authentication (HTTP 401), and the issuer URL varies across cluster types (standard, AWS STS, Azure WIF). The `public_keys_file` workaround exists but is fragile. For non-K8s senders (external services with JWT tokens), the OIDC extension works as-is.
 
-3. **Context loss at batch processor boundary.** If the pipeline order is wrong (batch before identity stamping), auth context is silently lost. This is a configuration footgun that documentation must address clearly.
+3. **Context loss at batch processor boundary.** If the pipeline order is wrong (batch before identity stamping), auth context is silently lost — and the headers setter's `from_attribute` on a batched exporter doesn't just lose the header, it **panics the collector** (nil `Auth` after a batch merge, no nil check in `AttributeSource.Get`; visible only under load, when requests actually merge). This is a configuration footgun that documentation must address clearly.
 
 4. **No error signaling to senders.** When data is dropped due to routing (implicit authorization), the sender receives a success response. This matches how many multi-tenant telemetry systems work but makes debugging harder.
 
 5. **Routing connector and OIDC extension are both TP.** Building a supported multi-tenant capability on TP components has product implications. Promotion to GA should be evaluated.
 
+6. **Token passthrough forwards API-capable credentials through the shared collector.** With passthrough, every sender's SA token — usable against the K8s API within the SA's RBAC permissions — transits the collector and is forwarded to the backend. A compromised collector, a compromised backend, or an eavesdropped connection can replay the token until it expires. Mitigations: TLS on the collector→backend hop (the examples show plain `http://` for readability only), short-lived bound SA tokens, and backend Roles scoped to the minimum verbs (e.g., `mlflow-operator-mlflow-integration`).
+
 ### Open Questions
 
 1. **Upstream path for `k8ssaauthextension`?** The Jamstah implementation exists but is not proposed upstream. Should Red Hat collaborate with the author (James Hewitt, IBM) to improve it (add caching, document auth attributes) and propose it for `opentelemetry-collector-contrib`? The `k8sattributesprocessor` provides precedent for K8s-specific components. Related upstream discussion: [#48895](https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/48895).
 
-2. **Should the operator generate multi-tenant config?** If this becomes a common pattern, operator-level support (Approach 3B) would reduce configuration burden significantly. Is there appetite for this API surface?
+2. **Should the operator generate multi-tenant config?** If this becomes a common pattern, operator-level support (generating the routing table, per-tenant pipelines and headers from a CRD) would reduce configuration burden significantly. Is there appetite for this API surface?
 
 3. **What support level should identity-aware ingestion have?** The OIDC extension and routing connector are both TP today. Should this capability be GA, requiring promotion of both components?
 
@@ -523,10 +534,3 @@ Workspace = K8s namespace. The workspace provider maps MLflow workspaces to name
    Revocation is handled by **short-lived bound SA tokens** — projected tokens are bound to the pod, so deleting the pod triggers revocation within ~60s plus the cache TTL. This is the ecosystem's preferred revocation mechanism over explicit cache invalidation.
 
    **Recommendation:** configurable TTL with a short default (10s–2 min range), asymmetric positive/negative caching, cache key as SHA-256 hash of the token (not the raw token). What is the expected QPS and can the K8s API server handle it?
-
-## Constraints
-
-1. All approaches must work with the upstream OpenTelemetry Collector — no proprietary forks.
-2. New components should be contributed upstream to opentelemetry-collector-contrib, not maintained only in the Red Hat distro.
-3. The solution must work for OTLP over both gRPC and HTTP protocols.
-4. SA token projection with a custom audience requires sender-side pod spec changes (`serviceAccountToken` volume with `audience` field) — this is a deployment requirement, not a collector change. The audience is optional (defaults to the cluster's API server audience). When set, the value depends on how identity is forwarded: a collector-specific audience when the collector terminates the token, or the backend's expected audience when the token is passed through for downstream authorization.
